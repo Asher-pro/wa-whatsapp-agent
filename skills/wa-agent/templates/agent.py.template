@@ -1,0 +1,31 @@
+"""
+{{AGENT_NAME}} - AI conversation logic.
+Handles message processing, conversation history, and LLM calls.
+"""
+
+from config import settings
+from database import get_history, save_message
+
+# Initialize LLM client
+{{LLM_INIT_BLOCK}}
+
+
+def get_response(phone: str, message: str, sender_name: str = "") -> str:
+    """Process a message and return an AI response."""
+
+    # Load conversation history
+    history = get_history(phone, limit=settings.MAX_HISTORY)
+
+    # Build messages for LLM
+    messages = [{"role": "system", "content": settings.SYSTEM_PROMPT}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": message})
+
+    # Call LLM
+    {{LLM_CALL_BLOCK}}
+
+    # Save conversation
+    save_message(phone, "user", message)
+    save_message(phone, "assistant", reply)
+
+    return reply

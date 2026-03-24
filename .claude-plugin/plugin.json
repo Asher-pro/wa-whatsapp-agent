@@ -1,0 +1,23 @@
+{
+  "name": "wa-whatsapp-agent",
+  "description": "Build, deploy, and maintain a WhatsApp AI agent - step by step, no coding required. Guides non-technical users through the entire process: connecting WhatsApp via Green API, building an AI-powered conversational agent, deploying to Render.com, and ongoing maintenance.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Practice AI",
+    "email": "asher@practice-ai.co.il"
+  },
+  "homepage": "https://github.com/aviz85/wa-whatsapp-agent",
+  "repository": "https://github.com/aviz85/wa-whatsapp-agent",
+  "license": "MIT",
+  "keywords": [
+    "whatsapp",
+    "agent",
+    "bot",
+    "green-api",
+    "ai",
+    "chatbot",
+    "hebrew",
+    "no-code",
+    "practice-ai"
+  ]
+}

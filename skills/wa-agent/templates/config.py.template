@@ -1,0 +1,28 @@
+"""
+Configuration - loads all settings from environment variables.
+"""
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+class Settings:
+    # Green API
+    GREEN_API_URL: str = os.getenv("GREEN_API_URL", "https://api.green-api.com")
+    GREEN_API_INSTANCE: str = os.getenv("GREEN_API_INSTANCE", "")
+    GREEN_API_TOKEN: str = os.getenv("GREEN_API_TOKEN", "")
+
+    # LLM
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "{{LLM_MODEL}}")
+
+    # Agent
+    SYSTEM_PROMPT: str = os.getenv("SYSTEM_PROMPT", """{{SYSTEM_PROMPT}}""")
+    MAX_HISTORY: int = int(os.getenv("MAX_HISTORY", "{{MAX_HISTORY}}"))
+
+    # Database
+    DATABASE_PATH: str = os.getenv("DATABASE_PATH", "./conversations.db")
+
+
+settings = Settings()

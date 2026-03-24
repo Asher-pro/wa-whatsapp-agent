@@ -1,0 +1,22 @@
+{
+  "name": "practice-ai-plugins",
+  "owner": {
+    "name": "Practice AI",
+    "email": "asher@practice-ai.co.il"
+  },
+  "metadata": {
+    "description": "Practice AI plugins for Claude Code - tools for building AI agents and automations",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "wa-whatsapp-agent",
+      "source": ".",
+      "description": "Build, deploy, and maintain a WhatsApp AI agent - no coding required",
+      "version": "1.0.0",
+      "category": "automation",
+      "tags": ["whatsapp", "agent", "bot", "green-api", "hebrew", "no-code"],
+      "strict": true
+    }
+  ]
+}
