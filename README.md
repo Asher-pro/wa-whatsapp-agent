@@ -5,11 +5,16 @@ A Claude Code plugin that guides non-technical users through building, deploying
 ## Installation
 
 ```
-/plugin marketplace add aviz85/wa-whatsapp-agent
+/plugin marketplace add Asher-pro/wa-whatsapp-agent
 /plugin install wa-whatsapp-agent@practice-ai-plugins
 ```
 
 Then type `/wa` to start.
+
+To test locally without marketplace:
+```
+claude --plugin-dir /path/to/wa-whatsapp-agent
+```
 
 ## What This Plugin Does
 
