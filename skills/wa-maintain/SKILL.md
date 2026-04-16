@@ -222,10 +222,46 @@ Fix: student scans new QR code on the bot's phone. No credential changes — exi
 | "הסוכן לא מכיר את היומן שלי" | Token expired | Re-run OAuth |
 | "הסוכן ענה למי שלא צריך" | Whitelist bypass or misspelled phone | Check `spec.audience.authorized_contacts` format (country code, no `+`, no `0`) |
 | "תשובות לא עקביות" | LLM temperature too high or prompt too vague | Tighten `out_of_scope_response`, narrow `in_scope` |
-| "תזכורות לא מגיעות" | Timezone bug in APScheduler or server restart wiped jobs | Check DB jobstore exists, check timezone in `reminders.py` |
+| "תזכורות לא מגיעות" | APScheduler job fired with bogus `chat_id` (LLM guessed) OR Render restart wiped jobs | Check `agent.py` has `FRAMEWORK_INJECTED_CHAT_ID` set and `chat_id` is overridden. If jobstore is ephemeral — route to `wa-persistence` Sub-flow A or B. |
+| "הבוט שוכח שיחות אחרי כל deploy" | SQLite at ephemeral path on Render Free | Route to `wa-persistence` — choose sub-flow based on budget. Most students pick Supabase (free). |
+| "הבוט קרא לכלי עם ארגומנט מוזר" (name as chat_id, etc.) | LLM picked a framework-owned parameter | Add tool name to `FRAMEWORK_INJECTED_CHAT_ID` in `agent.py`; framework will override whatever the LLM picks. |
 | "לקוח בקש נציג אנושי, לא קיבלתי התראה" | `HANDOFF_MANAGER_PHONE` wrong or Sub-flow D not wired | Test with `tools/human_handoff.py` directly |
 | "הבוט עונה בקבוצות" | `answer_groups: false` not enforced in `main.py` | Add `if chat_id.endswith("@g.us"): return` early in webhook handler |
 | "דיברתי עם לקוח מהמספר של הבוט, והבוט ענה במקומי" | Known loop bug | Re-read `wa-characterize` Q6, switch handoff to `phone_number_relay` mode |
+
+## Rolling Back a Bad Deploy
+
+Any deploy that broke the bot can be rolled back to the previous working revision. Two paths:
+
+**Via Render dashboard** (easiest):
+- Open the service at `$RENDER_DASHBOARD_URL` (in `.wa-state.json`)
+- Deploys tab → find the last deploy marked `live` before the broken one → "Rollback"
+- Takes ~30s to swing back
+
+**Via API** (for the CLI-inclined):
+```bash
+# List recent deploys
+curl -fsS "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys?limit=10" \
+  -H "Authorization: Bearer $RENDER_API_KEY" | jq '.[] | {id, status, createdAt, commit}'
+
+# Pick the commit SHA of the last known good deploy, then:
+curl -fsS -X POST "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys" \
+  -H "Authorization: Bearer $RENDER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"commitId": "<sha>", "clearCache": "do_not_clear"}'
+```
+
+After rollback: investigate what broke locally. Fix, push a new commit, redeploy. Don't force-push over the broken commit — git history is useful evidence when the bug reappears.
+
+## Local Dev Alongside Production
+
+Students often want to iterate locally after the bot is live. Done right, local and prod share nothing that matters:
+
+1. **Same `.env`** file - `python-dotenv` loads it in both places. Render injects its own copies of the keys; local reads from `.env`.
+2. **Different DB in local**: set `DATABASE_URL=postgresql://localhost/wa_dev` locally, or keep using `DATABASE_PATH=./dev.db` for a quick SQLite. Production's URL stays on Render env vars. Never hit production DB from local by accident.
+3. **Skip webhook-to-public**: don't expose local with ngrok. Instead, test with the fake-webhook curl from `wa-build` step 6.
+4. **Branch for experiments**: work on `feature-X` branch. Only push to `main` when verified. Render deploys from `main` by default.
+5. **Log aggregation**: nothing magical — watch Render logs separately (`render logs --resources $RENDER_SERVICE_ID --tail`) when diagnosing prod.
 
 ## Redeploy Checklist
 

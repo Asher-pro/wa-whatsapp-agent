@@ -509,6 +509,11 @@ Search logs for the tool name. For each external tool, the error typically point
 | `render deploys create --wait` on a brand-new service creates a duplicate deploy | Don't run it after `services create` — the first deploy is already queued. Poll the existing deploy via REST (see Phase E). Use `deploys create` only for later redeploys. |
 | `curl ... /env-vars` POST returns 405 Method Not Allowed | Only `PUT` is supported, and `PUT` **replaces all env vars**. Use the read-modify-write pattern (see "Safe env-var update" in Phase D). |
 | Green API `getSettings` returns empty `webhookUrl` right after `setSettings` returned `saveSettings: true` | Green API has ~3-5s propagation. Add `sleep 5` between set and get, or poll up to 3 times. |
+| Changed an env var but no new deploy appeared | Render's auto-redeploy-on-env-change is unreliable. Use `trigger_redeploy` helper explicitly after any env var mutation. |
+| Service crashes after env var change with `psycopg2.OperationalError: Network is unreachable` and an IPv6 address | Student put Supabase **Direct** URL as `DATABASE_URL`. Render Free has no outbound IPv6. Swap to Supabase **Session pooler** URL. See `wa-persistence` Sub-flow B2. |
+| Service crashes after DB migration with `FATAL: Tenant or user not found` | Pooler URL has wrong username — must be `postgres.<project-ref>`, not just `postgres`. Re-copy from Supabase dashboard exactly. |
+| Old env var `DATABASE_PATH` lingers after Supabase/Postgres migration | `add_env_var` replaces same-key entries but leaves unrelated old vars. After migrating, `remove_env_var "$RENDER_SERVICE_ID" "DATABASE_PATH"` explicitly. |
+| APScheduler jobstore fails with "unknown driver" after Postgres migration | SQLAlchemy URL needs explicit driver: `postgresql+psycopg2://...` not plain `postgresql://...`. |
 
 ## Architectural Notes (for Claude Code's reference)
 

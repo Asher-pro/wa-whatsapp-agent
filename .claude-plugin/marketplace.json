@@ -8,7 +8,7 @@
     {
       "name": "wa-whatsapp-agent",
       "description": "Build, deploy, and maintain a WhatsApp AI agent - no coding required",
-      "version": "2.2.0",
+      "version": "2.2.1",
       "source": "./",
       "author": {
         "name": "Practice AI"

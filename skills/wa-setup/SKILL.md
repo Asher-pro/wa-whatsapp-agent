@@ -165,7 +165,21 @@ Phone format: country code + number (no `+`, no `0`), `@c.us` suffix. Israeli `0
 **Student confirms they received the message** on their personal phone.
 
 **Inbound test** - student → bot:
-**"עכשיו מהטלפון האישי שלך, שלח לבוט הודעה כלשהי - 'היי' זה מספיק."**
+
+**Critical**: the student needs to know the bot's actual phone number (its WID), not their own. Fetch it from Green API and display:
+
+```bash
+BOT_WID=$(curl -fsS "${GREEN_API_URL}/waInstance${GREEN_API_INSTANCE}/getSettings/${GREEN_API_TOKEN}" | jq -r .wid)
+# e.g., "972501234567@c.us"
+BOT_PHONE=$(echo "$BOT_WID" | sed 's/@c.us//')
+# e.g., "972501234567"
+```
+
+Then tell the student:
+
+**"עכשיו מהטלפון האישי שלך, שלח לבוט הודעה. המספר של הבוט הוא: [BOT_PHONE]. תוסיף אותו לאנשי קשר (או פשוט תשלח לו דרך WhatsApp Web / אפליקציה), ותכתוב 'היי'."**
+
+Without this, students often send the test message to their own number by mistake and then debug an inbound test that never happened.
 
 Poll the notification queue:
 ```bash

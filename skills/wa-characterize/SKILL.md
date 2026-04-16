@@ -96,8 +96,18 @@ Skip this question if the student's tools (calendar, mail) cover it. Otherwise: 
 
 Record as `static_knowledge` (short paragraphs).
 
-For **customer service**:
-**"נכתוב את מאגר הידע. תספר לי: שעות פעילות, איפה העסק, אילו שירותים/מוצרים יש, מחירים אם רלוונטי, מדיניות (החזרים, שילוח), ושאלות נפוצות שלקוחות שואלים."**
+For **customer service** — offer a skeleton, don't start from a blank page:
+
+**"נכתוב את מאגר הידע. במקום להתחיל מאפס, אני אשאל אותך סעיף-סעיף. ענה על מה שרלוונטי, דלג על מה שלא:"**
+
+Ask each, wait for answer, summarize back:
+
+1. **שעות פעילות**: "מתי העסק פתוח? למשל 'א׳-ה׳ 9-18, ו׳ 9-13, שבת סגור'"
+2. **מיקום**: "כתובת פיזית אם רלוונטי, או 'אונליין בלבד'"
+3. **שירותים/מוצרים**: "3-5 דברים עיקריים שהעסק מציע"
+4. **מחירים**: "טווחי מחיר אם אתה מוכן לפרסם, או 'המחיר מתואם אישית' אם לא"
+5. **מדיניות**: "החזרים, ביטולים, שילוח, אחריות - מה שרלוונטי לעסק שלך"
+6. **שאלות נפוצות**: "3-5 שאלות שלקוחות שואלים אותך כל הזמן, עם התשובות שלך"
 
 Record as `kb_sections: {hours, location, offerings, pricing, policies, faq}`.
 
@@ -106,12 +116,13 @@ Record as `kb_sections: {hours, location, offerings, pricing, policies, faq}`.
 ### Q5. Tools
 Explain the concept first: **"הבוט יכול 'לעשות דברים', לא רק לדבר. כל 'עושה דברים' הוא כלי. בוא נחליט אילו כלים הוא צריך."**
 
-Show the menu:
-- **📅 Google Calendar** - read events, create events, reschedule
-- **✉️ Gmail** - read recent emails, search emails, mark read
-- **💬 WhatsApp groups** - read history from groups the bot is in
-- **⏰ Reminders** - schedule a future message to the student
-- **👤 Human handoff** - forward to a human (typically customer service only)
+Show the menu with concrete WhatsApp examples — this makes the choice much easier than abstract capability descriptions:
+
+- **📅 Google Calendar** - *"מה יש לי מחר?" / "תקבע לי פגישה עם יוני ביום חמישי ב-10" / "תזיז את הפגישה של 14:00 ל-15:00"*
+- **✉️ Gmail** - *"יש מיילים חדשים?" / "חפש מיילים מיוני על פרויקט X" / "קרא לי את המייל האחרון"*
+- **💬 WhatsApp groups** - *"מה היה בקבוצת המשפחה היום?" / "סכם לי את הקבוצה של הצוות"*
+- **⏰ Reminders** - *"תזכיר לי בעוד שעה להוציא כביסה" / "תזכיר לי מחר ב-9 להתקשר לאמא"*
+- **👤 Human handoff** - *"אני רוצה לדבר עם בן אדם"* - הבוט מעביר פרטים לבעל העסק (בדרך כלל לבוט שירות לקוחות)
 
 **"אילו מהכלים האלה הבוט צריך? אני אעזור לחבר אותם אחר כך - עכשיו רק מסמנים."**
 
