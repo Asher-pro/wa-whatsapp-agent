@@ -130,17 +130,28 @@ Use `--private`. Not because the code is sensitive — it isn't, secrets are in 
 
 ## Phase C: GitHub ↔ Render (one-time, browser, if needed)
 
-**This is the only truly manual step.** Render needs authorization to read the student's GitHub repos. If the student has used Render before with this GitHub account, skip. Otherwise:
+**This is the only truly manual step.** Render needs authorization to read the student's GitHub repos. If the student has used Render with this GitHub account before, skip. Otherwise the `services create` in Phase D will fail with a "repo not authorized" / "unable to find repository" error.
 
-1. Try a dry-run: `render services create --name test-connection --type web_service --repo https://github.com/[user]/[bot]-whatsapp --branch main --runtime python --build-command 'echo test' --start-command 'echo test' --plan free --dry-run 2>&1`
-2. If the output mentions "repo not authorized" or similar: **STOP** and guide the student:
+**Handle lazily**: don't pre-check. Just proceed to Phase D. If `services create` fails with a repo error:
+
+1. **STOP** and guide the student:
    - Open https://dashboard.render.com/settings#git-providers
    - Click "Connect GitHub"
-   - Approve for the specific repo or all repos
+   - Approve either for the specific repo or for all repos
    - Return and say "done"
-3. Retry step 1 until it succeeds.
+2. Retry the `services create` command — it should now succeed.
 
-**Why this happens**: Render workspaces each authorize their own set of GitHub repos. First service from a new account needs this handshake. Subsequent services don't.
+**Why not pre-check**: the CLI has no `--dry-run` flag, and there's no clean "repo already authorized?" query. Attempting to probe wastes an API call and complicates the skill. The "fail once, fix, retry" flow is cleaner for a one-time cost.
+
+**Workspace disambiguation** (if the student belongs to multiple Render workspaces):
+```bash
+# List workspaces - CLI has no "list" subcommand, use REST
+curl -fsS "https://api.render.com/v1/owners" \
+  -H "Authorization: Bearer $RENDER_API_KEY" | jq
+# Pick the right owner ID, then:
+render workspace set <OWNER_ID> --confirm
+```
+The `--confirm` flag is required in non-interactive shells (skill runs count as non-interactive).
 
 ## Phase D: Create Resources (automated)
 
@@ -233,36 +244,93 @@ PG_ID=$(echo "$PG_OUTPUT" | jq -r .id)
 PG_CONN=$(curl -fsS "https://api.render.com/v1/postgres/$PG_ID/connection-info" \
   -H "Authorization: Bearer $RENDER_API_KEY" | jq -r .externalConnectionString)
 
-# Add to the web service env
-curl -fsS -X PUT "https://api.render.com/v1/services/$SVC_ID/env-vars" \
-  -H "Authorization: Bearer $RENDER_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d "[{\"key\":\"DATABASE_URL_PG\",\"value\":\"$PG_CONN\"}]"
+# Add DATABASE_URL_PG to the web service env - see "Safe env-var update" below
+add_env_var "$SVC_ID" "DATABASE_URL_PG" "$PG_CONN"
 ```
 
 Then create the `user_tokens` table — run `scripts/init_pg.py` from the project locally, pointing at `DATABASE_URL_PG`. (This script is written during `wa-connect` E2 when Outlook is being wired; if Outlook is planned but not yet connected, skip this and let `wa-connect` handle it when the time comes.)
 
-## Phase E: Deploy + Wait for Live
+### Safe env-var update (use this helper everywhere)
+
+**Critical gotcha**: Render's `/env-vars` endpoint only supports `PUT`, and `PUT` **replaces all env vars at once**. A naive `PUT [{"key":"X","value":"Y"}]` wipes every other variable on the service. `POST` returns 405.
+
+Read-modify-write is the only safe pattern. Define this helper once at the top of your deploy script and reuse it:
 
 ```bash
-render deploys create "$SVC_ID" --wait
+# Append or update a single env var without disturbing the others.
+# Usage: add_env_var <service_id> <key> <value>
+add_env_var() {
+  local svc_id="$1" key="$2" value="$3"
+  local existing merged
+  existing=$(curl -fsS "https://api.render.com/v1/services/$svc_id/env-vars" \
+    -H "Authorization: Bearer $RENDER_API_KEY" \
+    | jq '[.[].envVar | {key, value}]')
+  # Remove any prior entry with the same key, then append the new one
+  merged=$(echo "$existing" | jq --arg k "$key" --arg v "$value" \
+    '[.[] | select(.key != $k)] + [{key: $k, value: $v}]')
+  curl -fsS -X PUT "https://api.render.com/v1/services/$svc_id/env-vars" \
+    -H "Authorization: Bearer $RENDER_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d "$merged" >/dev/null
+}
 ```
 
-`--wait` blocks until the deploy finishes. Stream logs in a parallel process if the student wants to watch:
+Use `add_env_var` whenever env vars need to be added **after** the initial `services create`:
+- Postgres connection URL (Outlook flow)
+- Google OAuth tokens after `wa-connect` Sub-flow A
+- Any tool credential after `wa-connect` sub-flows
+- `wa-maintain` adjustments (LLM key rotation, prompt updates)
+
+For the **initial** `services create`, keep using `--env-var KEY=VALUE` flags — that's atomic and doesn't need read-modify-write.
+
+## Phase E: Wait for First Deploy (poll, don't trigger)
+
+**Critical**: `render services create` **already triggered a deploy** as part of service creation. Do **NOT** run `render deploys create --wait` here — that creates a duplicate deploy or confuses the CLI.
+
+Instead, poll the status of the deploy triggered by `services create`:
+
 ```bash
-render logs --resources "$SVC_ID" --tail &
-LOGS_PID=$!
-# (after render deploys create finishes:)
-kill $LOGS_PID 2>/dev/null
+# Grab the latest (= only) deploy for this service
+DEP_ID=$(curl -fsS "https://api.render.com/v1/services/$SVC_ID/deploys?limit=1" \
+  -H "Authorization: Bearer $RENDER_API_KEY" \
+  | jq -r '.[0].deploy.id')
+
+echo "Waiting for deploy $DEP_ID..."
+
+# Poll every 15s, up to 10 min total
+for i in $(seq 1 40); do
+  STATUS=$(curl -fsS "https://api.render.com/v1/services/$SVC_ID/deploys/$DEP_ID" \
+    -H "Authorization: Bearer $RENDER_API_KEY" | jq -r .status)
+  echo "  [$i/40] status=$STATUS"
+  case "$STATUS" in
+    live)        echo "Deploy live ✓"; break ;;
+    *failed*|canceled|deactivated)
+                 echo "Deploy ended with $STATUS"; break ;;
+    *)           sleep 15 ;;
+  esac
+done
 ```
 
-After success: verify the health endpoint.
+Possible end statuses (from the Render API):
+- `live` — success, continue to health check
+- `build_failed` — `requirements.txt` issue (most common: Python version — see Troubleshooting)
+- `update_failed` — code issue (Python error on startup)
+- `canceled` / `deactivated` — rare, investigate
+
+If the deploy failed, stream logs to find the cause:
+```bash
+render logs --resources "$SVC_ID" --tail --num 200
+```
+
+After `live`: verify the health endpoint.
 ```bash
 curl -fsS "${SVC_URL}/health"
 ```
 Expected: `{"status":"ok"}`. If not, jump to the Debug Playbook below.
 
 Save the URL to `.wa-state.json` as `render_url`.
+
+**Use `render deploys create --wait` only for later redeploys** (in `wa-maintain` and `wa-connect` when the code has changed and been pushed). It's wrong here because `services create` already started one.
 
 ## Phase F: Wire Green API Webhook (automated)
 
@@ -281,12 +349,28 @@ curl -fsS -X POST "${GREEN_API_URL}/waInstance${GREEN_API_INSTANCE}/setSettings/
 
 Expected response: `{"saveSettings": true}`.
 
-Verify it stuck:
+**Wait before verifying** — Green API has ~3-5 seconds of propagation delay between `setSettings` returning success and `getSettings` reflecting the change:
+
 ```bash
-curl -fsS "${GREEN_API_URL}/waInstance${GREEN_API_INSTANCE}/getSettings/${GREEN_API_TOKEN}" | jq '.webhookUrl, .incomingWebhook'
+sleep 5
 ```
 
-Should print the Render URL and `"yes"`.
+Then verify it stuck (poll up to 3 times in case propagation is slow):
+```bash
+for i in 1 2 3; do
+  RESULT=$(curl -fsS "${GREEN_API_URL}/waInstance${GREEN_API_INSTANCE}/getSettings/${GREEN_API_TOKEN}")
+  WEBHOOK=$(echo "$RESULT" | jq -r .webhookUrl)
+  INCOMING=$(echo "$RESULT" | jq -r .incomingWebhook)
+  if [ "$WEBHOOK" = "${SVC_URL}/webhook/green-api" ] && [ "$INCOMING" = "yes" ]; then
+    echo "Webhook verified ✓"
+    break
+  fi
+  echo "  [$i/3] not yet propagated (webhook=$WEBHOOK), retrying..."
+  sleep 5
+done
+```
+
+Should print the Render URL and `"yes"`. If after 3 attempts still empty, re-run the `setSettings` call — the save may have silently failed.
 
 ## Phase G: Live End-to-End Test
 
@@ -311,7 +395,9 @@ Update `.wa-state.json`:
 - Append `"deploy"` to `completed_stages`
 - Set `render_url` to `$SVC_URL`
 - Set `render_service_id` to `$SVC_ID` (for future redeploys)
+- Set `render_dashboard_url` to the `dashboardUrl` from the `services create` response (useful for manual debugging)
 - Set `render_postgres_id` if created
+- Set `render_region` to the region used
 - Update `last_touched_iso`
 - **Set `current_stage`**:
   - If `spec.tools` has external tools (anything other than `reminders`) not in `connected_tools` → `"connect"`
@@ -381,6 +467,8 @@ Search logs for the tool name. For each external tool, the error typically point
 
 | Problem | Solution |
 |---------|----------|
+| Build fails with `maturin failed` / `pydantic_core` / `Read-only file system (os error 30)` | Render is using Python 3.14, which has no prebuilt `pydantic_core` wheel. Pin Python by committing `.python-version` with `3.12.7` to the repo root, then push. `wa-build` should have done this — if missing, create it now. |
+| Pinned Python via `runtime.txt` but it's ignored | Render does **not** read `runtime.txt` (that's a Heroku convention). Use `.python-version` instead. Delete `runtime.txt`. |
 | `render services create` fails with "repo not authorized" | Phase C wasn't done. Go to dashboard.render.com/settings#git-providers, connect GitHub. |
 | `render services create` fails with "not logged in" | `RENDER_API_KEY` not exported in current shell. `export RENDER_API_KEY="..."` from `.env`. |
 | Deploy stuck on "Building" >5 min | `pip install` resolving conflicts. Read build logs. |
@@ -390,7 +478,11 @@ Search logs for the tool name. For each external tool, the error typically point
 | Microsoft token expired | `wa-connect` E9 (token keeper) not set up. Re-run OAuth via `wa-connect`. |
 | Webhook test returns 404 | `main.py` route path mismatch. Check and align. |
 | Attach disk fails with "plan does not support disks" | On Free tier. Upgrade or skip disk (ephemeral DB). |
-| `render` CLI complains about workspace | `render workspace list` then `render workspace set <id>` to pick the right one. |
+| `render workspace list` errors: "unknown command" | CLI has no `list` subcommand. Use REST: `curl -H "Authorization: Bearer $RENDER_API_KEY" https://api.render.com/v1/owners \| jq`. |
+| `render workspace set <id>` hangs in a non-TTY context | Add `--confirm` flag to skip the interactive prompt. |
+| `render deploys create --wait` on a brand-new service creates a duplicate deploy | Don't run it after `services create` — the first deploy is already queued. Poll the existing deploy via REST (see Phase E). Use `deploys create` only for later redeploys. |
+| `curl ... /env-vars` POST returns 405 Method Not Allowed | Only `PUT` is supported, and `PUT` **replaces all env vars**. Use the read-modify-write pattern (see "Safe env-var update" in Phase D). |
+| Green API `getSettings` returns empty `webhookUrl` right after `setSettings` returned `saveSettings: true` | Green API has ~3-5s propagation. Add `sleep 5` between set and get, or poll up to 3 times. |
 
 ## Architectural Notes (for Claude Code's reference)
 

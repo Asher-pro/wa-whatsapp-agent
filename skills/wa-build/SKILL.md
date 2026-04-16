@@ -38,6 +38,7 @@ project-dir/
 ├── .env                    # secrets (from wa-setup, wa-connect will append)
 ├── .env.example            # committed, shows which vars are needed
 ├── .gitignore              # excludes .env, __pycache__, *.db
+├── .python-version         # pins Python to 3.12.x (Render reads this)
 ├── spec.json               # from wa-characterize, source of truth
 ├── requirements.txt        # pinned versions
 ├── render.yaml             # Render service config (wa-deploy uses this)
@@ -58,6 +59,8 @@ project-dir/
 ```
 
 **Why this matters:** `wa-connect` and `wa-maintain` both look for `tools/` and `TOOL_REGISTRY`. If the layout drifts, those skills break.
+
+**Why `.python-version` is mandatory**: Render defaults new Python services to the latest Python (currently 3.14), where many pinned dependencies (notably `pydantic-core`) have no prebuilt wheels. Pip falls back to compiling from Rust, Render's sandbox blocks the Cargo cache, build fails. `.python-version` with `3.12.7` avoids the whole class. Do **not** use `runtime.txt` (Heroku convention, Render ignores it).
 
 ## Critical Ordering Principle
 
@@ -172,6 +175,12 @@ Then guide API key creation via browser (STOP at password/payment).
 ### 3. Write core files
 
 Write each file from scratch based on `spec.json` and the acceptance criteria below. Do not use file templates — see the "Writing the Code" section below for why. The key properties each file must have:
+
+**`.python-version`** (must be first, single line)
+```
+3.12.7
+```
+Render reads this file during build and pins the interpreter. Without it, build fails on default Render Python (3.14). **This is not optional.** Also do NOT create `runtime.txt` — Render ignores it (Heroku convention).
 
 **`config.py`**
 - Loads `.env` via `python-dotenv`
