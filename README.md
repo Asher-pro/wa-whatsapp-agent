@@ -1,6 +1,6 @@
 # WhatsApp AI Agent Builder
 
-A Claude Code plugin that guides non-technical users through building, deploying, and maintaining a WhatsApp AI agent.
+A Claude Code plugin that guides non-technical users through building, deploying, and maintaining a WhatsApp AI agent — step by step, in Hebrew, with zero coding required.
 
 ## Installation
 
@@ -9,36 +9,53 @@ A Claude Code plugin that guides non-technical users through building, deploying
 /plugin install wa-whatsapp-agent@practice-ai-plugins
 ```
 
-Then type `/wa` to start.
+Then run `/wa` to start.
 
-To test locally without marketplace:
+## How It Works
+
+The plugin has one entry command (`/wa`) and six skills. You run `/wa`, it figures out where you are, and routes you to the right skill.
+
 ```
-claude --plugin-dir /path/to/wa-whatsapp-agent
+/wa ─┬─▶ wa-setup        (Green API + phone number)
+     ├─▶ wa-characterize (define what the bot does)
+     ├─▶ wa-build        (generate code)
+     ├─▶ wa-connect      (wire tools: calendar, mail, groups, reminders)
+     ├─▶ wa-deploy       (ship to Render)
+     └─▶ wa-maintain     (debug & update after launch)
 ```
 
-## What This Plugin Does
+Progress is tracked in a `.wa-state.json` file in your project — if you leave mid-way and come back a week later, `/wa` picks up where you left off.
 
-Guides you step-by-step through:
+## The Stack (Generated)
 
-1. **`/wa`** - Entry point, detects where you are and routes to the right step
-2. **wa-setup** - Connect your WhatsApp number via Green API
-3. **wa-agent** - Define your agent's personality and generate all the code
-4. **wa-deploy** - Deploy to Render.com for 24/7 operation
-5. **wa-maintain** - Change behavior, fix issues, update settings
+Opinionated, lean, readable:
 
-## Tech Stack (Generated)
+- **FastAPI** — webhook receiver
+- **Direct LLM SDK** (Anthropic or OpenAI) with native tool-calling — no framework magic
+- **SQLite** — conversation memory
+- **APScheduler** — reminders
+- **Google APIs** — Gmail + Calendar (one OAuth consent covers both)
+- **Microsoft Graph** (optional, advanced) — Outlook Mail + Calendar via `msal`
+- **Render.com** — deployment target
 
-The plugin generates a complete Python project:
-- **FastAPI** - Webhook server
-- **OpenAI / Anthropic SDK** - AI conversation
-- **SQLite** - Conversation memory
-- **Render.com** - Cloud hosting
+Why this and not LangChain/Agno/CrewAI? So you can read every line of your own bot's code and debug it. Framework magic bites non-technical users hardest when it fails.
 
-## Requirements
+## What You Need
 
-- Claude Code
-- A phone number for WhatsApp
-- Credit card for Green API (~$15/month) and LLM API (pay-per-use)
+- Claude Code installed
+- A phone number for WhatsApp (eSIM recommended, ~₪15/month)
+- Credit card for Green API (~$15/month for customer service; free tier works for personal assistant) and LLM API (pay-per-use, usually a few dollars/month)
+- If using Outlook: also Render Postgres (free tier)
+
+## The Three Layers of Orchestration
+
+For contributors:
+
+1. **`/wa` command** — single entry point, reads `.wa-state.json`, routes to the correct skill
+2. **Each skill** — does one stage of the work, writes progress back to `.wa-state.json`, offers the next skill on completion
+3. **`.wa-state.json`** — single source of truth for "where the student is"
+
+This means: no skill assumes state from file existence. No skill calls the next one blindly. `/wa` always has the full picture.
 
 ## License
 
