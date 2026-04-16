@@ -59,34 +59,51 @@ project-dir/
 
 **Why this matters:** `wa-connect` and `wa-maintain` both look for `tools/` and `TOOL_REGISTRY`. If the layout drifts, those skills break.
 
+## Critical Ordering Principle
+
+**The bot gets deployed after `wa-build`, before any external tools are connected.**
+
+This is intentional. Reasons:
+1. **Fast win**: student sees their bot alive and talking within an hour. Motivation matters.
+2. **Debugging isolation**: if something is broken, is it the code? the deploy? the OAuth? Staging the work means each failure is localized.
+3. **External tools require redeploy anyway**: every tool added in `wa-connect` triggers a push + redeploy cycle. No value in batching.
+4. **Local smoke test is not real validation**: the bot isn't "working" until the student can message it on WhatsApp. That requires Green API webhook → public URL → Render. Deploy is the real test.
+
+So `wa-build` scope is **minimal**:
+- Prompt is built
+- Conversation memory (SQLite)
+- Whitelist / audience filtering
+- **Reminders tool wired up** (native APScheduler — no external auth needed, comes "free")
+- External tools (Gmail, Calendar, WhatsApp groups) are **not** wired here. They're mentioned in the spec but not added to `TOOL_REGISTRY` yet.
+
 ## Flow
 
 ```dot
 digraph wa_build {
     rankdir=TB;
     "Read spec.json + .env" [shape=box];
-    "Ask: LLM choice\n(OpenAI vs Anthropic)" [shape=diamond];
+    "Ask: LLM choice" [shape=diamond];
     "Set up LLM API key\n(STOP for payment)" [shape=box];
     "Write core files\n(config, database, prompt, agent, main)" [shape=box];
-    "Write tool stubs\nfor tools listed in spec" [shape=box];
+    "Wire reminders tool\n(if in spec)" [shape=box];
     "pip install -r requirements.txt" [shape=box];
     "Run local smoke test\n(fake webhook → agent → reply)" [shape=box];
-    "Show student a sample conversation" [shape=box];
-    "Student happy?" [shape=diamond];
-    "Fine-tune prompt\n(wa-characterize iteration)" [shape=box];
-    "Done - suggest wa-connect" [shape=doublecircle];
+    "Show student sample conversation" [shape=box];
+    "Student happy with tone?" [shape=diamond];
+    "Fine-tune prompt" [shape=box];
+    "Done - suggest wa-deploy" [shape=doublecircle];
 
-    "Read spec.json + .env" -> "Ask: LLM choice\n(OpenAI vs Anthropic)";
-    "Ask: LLM choice\n(OpenAI vs Anthropic)" -> "Set up LLM API key\n(STOP for payment)";
+    "Read spec.json + .env" -> "Ask: LLM choice";
+    "Ask: LLM choice" -> "Set up LLM API key\n(STOP for payment)";
     "Set up LLM API key\n(STOP for payment)" -> "Write core files\n(config, database, prompt, agent, main)";
-    "Write core files\n(config, database, prompt, agent, main)" -> "Write tool stubs\nfor tools listed in spec";
-    "Write tool stubs\nfor tools listed in spec" -> "pip install -r requirements.txt";
+    "Write core files\n(config, database, prompt, agent, main)" -> "Wire reminders tool\n(if in spec)";
+    "Wire reminders tool\n(if in spec)" -> "pip install -r requirements.txt";
     "pip install -r requirements.txt" -> "Run local smoke test\n(fake webhook → agent → reply)";
-    "Run local smoke test\n(fake webhook → agent → reply)" -> "Show student a sample conversation";
-    "Show student a sample conversation" -> "Student happy?";
-    "Student happy?" -> "Fine-tune prompt\n(wa-characterize iteration)" [label="no"];
-    "Fine-tune prompt\n(wa-characterize iteration)" -> "Run local smoke test\n(fake webhook → agent → reply)";
-    "Student happy?" -> "Done - suggest wa-connect" [label="yes"];
+    "Run local smoke test\n(fake webhook → agent → reply)" -> "Show student sample conversation";
+    "Show student sample conversation" -> "Student happy with tone?";
+    "Student happy with tone?" -> "Fine-tune prompt" [label="no"];
+    "Fine-tune prompt" -> "Run local smoke test\n(fake webhook → agent → reply)";
+    "Student happy with tone?" -> "Done - suggest wa-deploy" [label="yes"];
 }
 ```
 
@@ -101,15 +118,56 @@ Identify from spec:
 - `handoff` → whether `tools/human_handoff.py` is created
 
 ### 2. Choose LLM (only if not already set)
-If `.env` already has an LLM key from a previous run, skip. Otherwise ask:
+If `.env` already has an LLM key from a previous run, skip. Otherwise present the student with a decision matched to their use case.
 
-**"הסוכן צריך 'מוח' - מודל AI. יש שתי אפשרויות:"**
-- **Anthropic Claude (Sonnet 4.5)** - איכות גבוהה, עברית מצוינת. ~$3 למיליון טוקנים קלט.
-- **OpenAI (GPT-4.1-mini)** - זול יותר, עברית סבירה. ~$0.4 למיליון טוקנים קלט.
+First explain the concept:
+**"הסוכן צריך 'מוח' - מודל AI שיחליט מה לענות ומתי לקרוא לכלי. המחיר נמדד בטוקנים (חלקי מילים) - בוט טיפוסי זה כמה דולרים בחודש, לא יותר."**
 
-**Default recommendation: Anthropic** for Hebrew quality (aligns with the course's feedback from Roei about Sonnet's Hebrew). Student can override.
+Then pick the recommendation based on `spec.archetype`:
 
-Then guide API key creation via browser (STOP at password/payment). Save to `.env` as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, and `LLM_MODEL` (e.g. `claude-sonnet-4-5-20250929`).
+#### For **personal_assistant** (low volume, quality matters):
+
+| מודל | חוזקות | חולשות | עלות ל-1000 הודעות |
+|---|---|---|---|
+| **Claude Haiku 4.5** 🟢 מומלץ | עברית טובה, קריאות כלים מצוינות, מהיר (~3שנ) | - | ~$2-4 |
+| Claude Sonnet 4.6 | עברית הכי טובה בשוק, הכי חכם | פי 3 יקר, איטי יותר | ~$6-12 |
+| GPT-5.4-mini | זול יותר, תחרותי | עברית טיפה פחות טבעית | ~$2-3 |
+| Gemini 2.5 Flash | הכי זול בקטגוריה | עברית סבירה, לא מצוינת | ~$1-2 |
+
+**ברירת מחדל: Claude Haiku 4.5** - `claude-haiku-4-5` - איזון הכי טוב.
+
+#### For **customer_service** (higher volume, brand matters):
+
+| מודל | חוזקות | חולשות | עלות ל-1000 הודעות |
+|---|---|---|---|
+| **Claude Haiku 4.5** 🟢 מומלץ | איזון מצוין, מהיר, עברית טובה | - | ~$2-4 |
+| Claude Sonnet 4.6 | איכות פרימיום | יקר פי 3 | ~$6-12 |
+| GPT-5.4 | תחרותי ל-Sonnet | ecosystem preference | ~$5-10 |
+
+**ברירת מחדל: Claude Haiku 4.5** - המודל ששווה את המאמץ להתחיל ממנו. אם תגלה שחסר איכות, קל לשדרג ל-Sonnet 4.6.
+
+#### For **budget-first** (student on a tight budget, low-volume hobby bot):
+
+- **GPT-5.4-nano** - `gpt-5.4-nano` - ~$0.3-1 ל-1000 הודעות. אבל עברית סבירה בלבד.
+- **Gemini 2.5 Flash** - גם זול. ראה טבלה.
+
+Present the table via AskUserQuestion with 3-4 options. Default to Claude Haiku 4.5 unless the student explicitly signals budget sensitivity.
+
+**Do NOT recommend these** (explain if student asks):
+- **Claude Opus 4.6** - overkill. 4-6 שניות לתשובה = חוויה רעה ב-WhatsApp. משלמים פי 5 מ-Haiku על איכות שהסוכן לא מנצל.
+- **Grok / DeepSeek** - עברית חלשה. לא מיועדים לשוק שלנו.
+- **GPT-4o / Claude 3.5** - מודלים ישנים (2024/2025), הוחלפו.
+
+Save to `.env`:
+```
+LLM_PROVIDER=anthropic          # or openai, google
+LLM_MODEL=claude-haiku-4-5      # full model ID
+ANTHROPIC_API_KEY=...           # or OPENAI_API_KEY, GOOGLE_API_KEY
+```
+
+Then guide API key creation via browser (STOP at password/payment).
+
+**Note on prices**: the numbers above are April 2026 snapshots. Prices change. If the student asks for current pricing, check the provider's pricing page directly - don't quote from memory.
 
 ### 3. Write core files
 
@@ -147,33 +205,49 @@ Write each file from scratch based on `spec.json` and the acceptance criteria be
 
 **`tools/__init__.py`**
 - `TOOL_REGISTRY: dict[str, ToolDef]` where each entry has `{"schema": <LLM tool schema>, "fn": <python callable>}`
-- Starts populated with just `send_whatsapp_reply` (always present, used by the framework itself not the LLM)
+- Starts **empty** (the framework populates on import; external tools added later by `wa-connect`)
 
-**`tools/whatsapp.py`**
+**`tools/whatsapp.py`** (framework-only, not an LLM tool)
 - `send_reply(chat_id, text)` - POSTs to Green API
 - `send_to_phone(phone_e164, text)` - same, but formats `chatId` correctly
+- Used internally by `main.py` and by future tools (e.g. reminders calling `send_to_phone`)
 
-### 4. Write tool stubs
-For each tool in `spec.tools`, create a stub file in `tools/` that:
-- Imports the tool from the appropriate library (or `raise NotImplementedError` with a clear message directing to `wa-connect`)
-- Exposes a tool definition dict: `{"schema": {...}, "fn": <callable>}`
-- Is added to `TOOL_REGISTRY` on import
+### 4. Wire the reminders tool (only if `"reminders"` in spec.tools)
 
-Stubs for unconnected tools are intentional. The agent can *see* the tool exists (the LLM will try to use it), but `wa-connect` fills in the implementation. This makes the handoff between skills explicit.
+Reminders are the **only tool wired in `wa-build`**. Why: they use APScheduler in-process, no external auth, no extra credentials. They work the moment the server starts.
 
-**Reminders exception**: `tools/reminders.py` is a full implementation if `reminders` in spec. APScheduler is simple enough to include here (no OAuth, no external API).
+External tools (Gmail, Calendar, WhatsApp groups, human handoff, Outlook) are **not** wired here. They go through `wa-connect` after deploy. If spec lists them:
+- Do **not** create `tools/google_calendar.py` yet
+- Do **not** mention them in the system prompt yet
+- Do **not** add them to `TOOL_REGISTRY`
+
+If `"reminders"` is in `spec.tools`, write `tools/reminders.py` with:
+- `create_reminder(chat_id, remind_at_iso, message)` — schedules an APScheduler job
+- `list_reminders(chat_id)` — returns pending reminders for a chat
+- `cancel_reminder(reminder_id)` — removes a job
+- SQLAlchemy jobstore pointed at the same SQLite file as `DATABASE_PATH` (survives restart)
+- Register in `TOOL_REGISTRY` on import
+- The system prompt mentions reminders are available
+
+**Why this minimalism matters**: the student will see a reply to their "היי" within minutes of deploy. If external tools were half-wired, the LLM would try to call them and fail with cryptic errors. Better to expose the LLM to only what's real.
 
 ### 5. Dependencies
-`requirements.txt` pinned:
+`requirements.txt` pinned (update pins to current stable versions — check PyPI, don't paste stale versions):
 ```
-fastapi==0.115.4
-uvicorn[standard]==0.32.0
-python-dotenv==1.0.1
-httpx==0.27.2
-anthropic==0.39.0          # OR openai==1.54.3 - only one, based on choice
-apscheduler==3.10.4
-pydantic==2.9.2
+fastapi
+uvicorn[standard]
+python-dotenv
+httpx
+apscheduler
+pydantic
+
+# Exactly one of these, based on LLM_PROVIDER:
+anthropic          # if using Claude (Haiku 4.5 / Sonnet 4.6)
+# openai           # if using GPT
+# google-genai     # if using Gemini
 ```
+
+Claude Code should pin to current stable versions at generation time. Don't ship unpinned to production, but also don't freeze to a 6-month-old version.
 
 Run `pip install -r requirements.txt`. If Python/pip missing, guide install via computer-use.
 
@@ -216,19 +290,17 @@ Keep the iteration loop tight - don't rewrite files the student hasn't asked abo
 
 Update `.wa-state.json`:
 - Append `"build"` to `completed_stages`
-- Set `current_stage: "connect"` if `spec.tools` is non-empty, else `"deploy"`
+- Set `current_stage: "deploy"` (always — external tools come after deploy)
 - Update `last_touched_iso`
 
-Then, based on spec:
+Then, regardless of what's in `spec.tools`:
 
-**If `spec.tools` has any tools:**
-**"הקוד מוכן. הבוט מדבר, אבל עדיין לא מחובר לכלים. השלב הבא: לחבר אותו ל[list tools from spec]. רוצה להתחיל עם אחד?"**
-- If yes → invoke `wa-connect` via Skill tool
-- If "דלג לעלאה" → explain: "אפשר, אבל הבוט יגיד לשואלים שאין לו גישה ליומן. מקובל?" If yes → invoke `wa-deploy`
+**"הקוד מוכן. הבוט מדבר איתך מקומית ומכיר את עצמו. השלב הבא: להעלות אותו לאוויר כדי שתוכל לדבר איתו בוואטסאפ אמיתי. אחרי זה נחבר את הכלים (יומן/מייל/וכו') אחד-אחד. רוצה להמשיך?"**
 
-**If `spec.tools` is empty:**
-**"הקוד מוכן. אין כלים חיצוניים - הבוט רק משוחח. השלב הבא: להעלות לאוויר. רוצה להמשיך?"**
 - If yes → invoke `wa-deploy` via Skill tool
+- If "תן לי רגע" → **"סגור. `/wa` כשתחזור."**
+
+**Important**: even if `spec.tools` includes Gmail/Calendar/groups, the student **first deploys**, then comes back through `/wa` to `wa-connect` to add each tool. Don't offer to skip ahead — it's bad for debugging.
 
 ## Writing the Code
 

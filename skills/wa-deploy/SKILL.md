@@ -1,43 +1,43 @@
 ---
 name: wa-deploy
-description: "Deploy a WhatsApp AI agent to Render.com for 24/7 operation. Use when a student wants to put their agent online, deploy to production, or says 'העלה סוכן', 'wa-deploy', 'deploy agent', 'תעלה לפרודקשן', 'תעלה את הסוכן', 'הסוכן מוכן מה עכשיו'. Also trigger after wa-build completes (for a simple bot without external tools) or after wa-connect (when tools are wired up). Handles GitHub push, Render web service, persistent disk for SQLite, Postgres if Microsoft tokens are used, Green API webhook connection, and live verification."
+description: "Deploy a WhatsApp AI agent to Render.com - automated via Render CLI + API. Use after wa-build (bot's tone is confirmed locally) or when student says 'העלה סוכן', 'wa-deploy', 'deploy agent', 'תעלה לפרודקשן', 'תעלה את הסוכן', 'הסוכן מוכן מה עכשיו'. Minimizes browser clicks: student provides a Render API key once, Claude Code runs CLI + REST API calls to create the web service, attach disk, optionally provision Postgres (for Outlook), deploy, and wire the Green API webhook. Student only intervenes for one-time GitHub↔Render OAuth connection and any payment approval."
 ---
 
 # Deploy the WhatsApp Agent to Render
 
-Put the built agent online so it runs 24/7. Handles GitHub, Render web service, persistent storage, Green API webhook wiring, and live verification.
+Put the built agent online — **automated**. The student provides a Render API key; Claude Code runs every other step via CLI and REST API. Total manual interventions: (1) create the API key once, (2) connect GitHub↔Render once, (3) approve payment if upgrading to a paid tier.
 
-**This skill does not write application code.** It orchestrates infrastructure - git, Render configuration, env var transfer, webhook setup.
+**This skill does not write application code.** It orchestrates infrastructure via the `render` CLI and Render REST API, plus `gh` for GitHub.
 
-**Prerequisites:** `wa-build` completed. `wa-connect` optional but recommended before deploy for any non-trivial bot.
+**Prerequisites:**
+- `wa-build` completed (bot talks locally, spec is frozen)
+- Green API credentials in `.env` (from `wa-setup`)
+- LLM API key in `.env` (from `wa-build`)
 
 ## Interaction Style
 
-Simple Hebrew. Principle: **"I do, you decide"** - Claude drives the git commands, the Render UI (via browser), and the Green API settings. The student approves account creation, payment, and anything destructive.
+Simple Hebrew. Principle: **"I do, you decide"**. The student sees progress updates as Claude Code runs each command, but rarely needs to click anything.
 
-## Pre-deploy Checks (Run in Order)
+## Tools This Skill Uses
 
-Before touching any external service, verify locally:
+| Tool | Install check | Purpose |
+|---|---|---|
+| `render` CLI (v2.15+) | `render --version` | Create service, trigger deploys, stream logs |
+| Render REST API | `curl` (preinstalled) | Attach disks, create Postgres (CLI doesn't cover these) |
+| `gh` CLI | `gh --version` | Push to GitHub |
+| `jq` | `jq --version` | Parse API JSON responses |
 
-1. **Code layout matches `wa-build` spec** - `main.py`, `agent.py`, `database.py`, `config.py`, `prompt.py`, `tools/__init__.py`, `requirements.txt`, `render.yaml`, `.env`, `.env.example`, `.gitignore`
-2. **Smoke test passes locally** - same fake-webhook curl from `wa-build` step 6
-3. **`.gitignore` excludes**: `.env`, `*.db`, `__pycache__`, `google_client_secret.json`
-4. **All tool stubs are implemented** (no `NotImplementedError` in `tools/*.py`) - or, if some tools are not needed in prod yet, they're removed from `TOOL_REGISTRY`
-
-If any check fails, stop and fix before proceeding.
+If any are missing, install at the top of Phase A (`brew install render gh jq` on Mac).
 
 ## Deployment Matrix (Derived from Spec)
 
-The exact Render configuration depends on what the bot uses:
-
-| Component in spec | Render resource needed |
+| Component in spec | Render resource |
 |---|---|
 | Always | Web Service (Python) |
-| SQLite conversations + reminders | Disk mount at `/data` (1GB, $0.25/mo) |
-| Microsoft/Outlook tools | Postgres (free tier) for `user_tokens` table |
-| Otherwise | No Postgres |
-
-Decide these before starting — confirm with the student at Phase B.
+| Always | Persistent Disk at `/data`, 1GB ($0.25/mo) — for SQLite conversations + reminders jobstore |
+| `outlook_calendar` or `outlook_mail` in `spec.tools` | Postgres Free (for `user_tokens` rotation table) |
+| `spec.archetype == "customer_service"` | Starter tier ($7/mo) — no cold starts |
+| `spec.archetype == "personal_assistant"` | Free tier is enough |
 
 ## Flow
 
@@ -45,216 +45,361 @@ Decide these before starting — confirm with the student at Phase B.
 digraph wa_deploy {
     rankdir=TB;
     "Pre-deploy checks" [shape=box];
-    "Phase A: GitHub" [shape=box];
-    "Phase B: Render resources\n(web + disk + optional pg)" [shape=box];
-    "Phase C: Env vars transfer" [shape=box];
-    "Phase D: First deploy\n+ wait for Live" [shape=box];
-    "Phase E: Green API webhook\nURL" [shape=box];
-    "Phase F: Live test\n(real phone → bot → real phone)" [shape=box];
+    "Phase A: Tooling + GitHub" [shape=box];
+    "Phase B: Render API key\n(student creates, pastes once)" [shape=box];
+    "Phase C: First-time GitHub↔Render\nOAuth (one-time, browser)" [shape=box];
+    "Phase D: Create resources\n(CLI + API, automated)" [shape=box];
+    "Phase E: Deploy + wait for live" [shape=box];
+    "Phase F: Wire Green API webhook\n(automated curl)" [shape=box];
+    "Phase G: Live test\n(student sends WhatsApp)" [shape=box];
     "Working?" [shape=diamond];
     "Debug" [shape=box];
-    "Done - suggest maintain" [shape=doublecircle];
+    "Done" [shape=doublecircle];
 
-    "Pre-deploy checks" -> "Phase A: GitHub";
-    "Phase A: GitHub" -> "Phase B: Render resources\n(web + disk + optional pg)";
-    "Phase B: Render resources\n(web + disk + optional pg)" -> "Phase C: Env vars transfer";
-    "Phase C: Env vars transfer" -> "Phase D: First deploy\n+ wait for Live";
-    "Phase D: First deploy\n+ wait for Live" -> "Phase E: Green API webhook\nURL";
-    "Phase E: Green API webhook\nURL" -> "Phase F: Live test\n(real phone → bot → real phone)";
-    "Phase F: Live test\n(real phone → bot → real phone)" -> "Working?";
-    "Working?" -> "Done - suggest maintain" [label="yes"];
+    "Pre-deploy checks" -> "Phase A: Tooling + GitHub";
+    "Phase A: Tooling + GitHub" -> "Phase B: Render API key\n(student creates, pastes once)";
+    "Phase B: Render API key\n(student creates, pastes once)" -> "Phase C: First-time GitHub↔Render\nOAuth (one-time, browser)";
+    "Phase C: First-time GitHub↔Render\nOAuth (one-time, browser)" -> "Phase D: Create resources\n(CLI + API, automated)";
+    "Phase D: Create resources\n(CLI + API, automated)" -> "Phase E: Deploy + wait for live";
+    "Phase E: Deploy + wait for live" -> "Phase F: Wire Green API webhook\n(automated curl)";
+    "Phase F: Wire Green API webhook\n(automated curl)" -> "Phase G: Live test\n(student sends WhatsApp)";
+    "Phase G: Live test\n(student sends WhatsApp)" -> "Working?";
+    "Working?" -> "Done" [label="yes"];
     "Working?" -> "Debug" [label="no"];
-    "Debug" -> "Phase F: Live test\n(real phone → bot → real phone)";
+    "Debug" -> "Phase G: Live test\n(student sends WhatsApp)";
 }
 ```
 
-## Phase A: GitHub
+## Pre-deploy Checks
 
-**"כדי להעלות את הסוכן לאוויר, הקוד צריך להיות ב-GitHub. זה כמו Drive לקוד - גם גיבוי וגם Render מושך משם."**
+Verify locally before running any external command:
 
-1. Verify `gh` CLI: `gh --version` → if missing, `brew install gh` (Mac) or browser fallback
-2. Verify auth: `gh auth status` → if not logged in, `gh auth login` (guides via browser)
-3. `cd [project-dir] && git init && git add . && git commit -m "Initial commit - [bot_name] WhatsApp agent"`
-4. `gh repo create [bot_name]-whatsapp --private --source=. --push`
-   - **Use `--private`** by default - the code references secrets indirectly. Student can make it public later if they want.
+1. Code layout matches `wa-build` spec: `main.py`, `agent.py`, `database.py`, `config.py`, `prompt.py`, `tools/__init__.py`, `tools/whatsapp.py`, `tools/reminders.py` (if reminders in spec), `requirements.txt`, `.env`, `.env.example`, `.gitignore`
+2. Smoke test passes locally (same fake-webhook curl from `wa-build`)
+3. `.gitignore` excludes: `.env`, `*.db`, `__pycache__`, `google_client_secret.json`
+4. **`.wa-state.json`** exists and `current_stage == "deploy"`
 
-**Sanity check**: browse to the repo in the student's GitHub account and confirm `.env` is NOT present (if it is, `.gitignore` was wrong - fix and force-push before continuing).
+Fail fast if any are missing.
 
-## Phase B: Render Resources
+## Phase A: Tooling + GitHub
 
-Open https://render.com.
+Install and authenticate the CLIs the student needs:
 
-**STOP for sign-up**: "תירשם ל-Render - חינם, אפשר עם חשבון GitHub."
-
-### B1. Create Postgres (only if Outlook is in spec)
-Check `spec.tools` - if it contains `outlook_calendar` or `outlook_mail`:
-- New → PostgreSQL → Free tier
-- Name: `[bot_name]-tokens`
-- Region: closest to student's timezone (Frankfurt for Israel)
-- Wait ~1 min for it to provision
-- Copy **External Database URL** → will become `DATABASE_URL_PG` env var
-- Run the `user_tokens` table creation (via Render's built-in `psql` shell or from local machine)
-
-### B2. Create Web Service
-- New → Web Service → Connect GitHub repository → select `[bot_name]-whatsapp`
-- Config:
-  - **Name**: `[bot_name]-whatsapp`
-  - **Region**: same as Postgres
-  - **Branch**: `main`
-  - **Runtime**: Python
-  - **Build Command**: `pip install -r requirements.txt`
-  - **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-  - **Instance Type**:
-    - **Free** — fine for personal assistant (sleeps after 15 min of inactivity, ~30s cold start on next message)
-    - **Starter ($7/mo)** — mandatory for customer service bot (no cold starts)
-    - Recommend by `spec.archetype`
-
-### B3. Add persistent Disk
-- Inside the service → Disks → Add Disk
-- Name: `data`
-- Mount Path: `/data`
-- Size: **1 GB** ($0.25/mo)
-
-**"זה 25 סנט לחודש. בלי זה, כל פעם שהסוכן מתאתחל הוא שוכח את כל השיחות הקודמות. אתה רוצה שישמור?"**
-
-If the student declines, change `DATABASE_PATH` to `./conversations.db` and warn them that history resets on redeploy.
-
-## Phase C: Environment Variables Transfer
-
-Inside the service → Environment → Add Environment Variable (for each row):
-
-| Variable | Value source | Notes |
-|---|---|---|
-| `GREEN_API_URL` | `.env` | |
-| `GREEN_API_INSTANCE` | `.env` | |
-| `GREEN_API_TOKEN` | `.env` | |
-| `LLM_PROVIDER` | `anthropic` or `openai` | |
-| `LLM_MODEL` | e.g. `claude-sonnet-4-5-20250929` | |
-| `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` | `.env` | Whichever provider |
-| `DATABASE_PATH` | `/data/conversations.db` | Matches disk mount |
-| `MAX_HISTORY` | `20` (or from spec) | |
-| `SYSTEM_PROMPT` | Output of `prompt.py` | Or leave unset if code reads `spec.json` directly — **pick one pattern and stick with it** |
-| `GOOGLE_CLIENT_ID` | `.env` | Only if Google tools |
-| `GOOGLE_CLIENT_SECRET` | `.env` | Only if Google tools |
-| `GOOGLE_REFRESH_TOKEN` | `.env` | Only if Google tools |
-| `MS_CLIENT_ID` | `.env` | Only if Microsoft tools |
-| `MS_CLIENT_SECRET` | `.env` | Only if Microsoft tools |
-| `MS_TENANT_ID` | `common` or `.env` | Only if Microsoft tools |
-| `DATABASE_URL_PG` | From Phase B1 | Only if Microsoft tools |
-| `HANDOFF_MANAGER_PHONE` | From spec | Only if `handoff` in spec |
-
-**Critical**: the student's `.env` is the source of truth. **Never type values from memory** - read from `.env` and copy verbatim. Typos here cause the bot to authenticate wrong later and the errors are cryptic.
-
-After adding env vars, click **Save Changes**. Render automatically redeploys.
-
-## Phase D: First Deploy
-
-Click **Manual Deploy → Deploy latest commit** (belt-and-suspenders).
-
-Watch the logs in real-time:
-- Build phase: `pip install` progress
-- Deploy phase: `Starting uvicorn...`
-- Health phase: `GET /health → 200`
-
-Wait for the status to show **Live** (green). Note the URL: `https://[service-name].onrender.com`.
-
-If build fails:
-- `ModuleNotFoundError` → missing package in `requirements.txt`
-- `SyntaxError` → broken Python in a generated file; fix and push
-- Exit code on start → check env vars first (missing variable)
-
-**Test the health endpoint from the student's browser**: `https://[url]/health` → should return `{"status": "ok"}`.
-
-## Phase E: Connect Green API to the Render URL
-
-Now wire the incoming webhook to the deployed service.
-
-### E1. Set webhook URL
-In Green API dashboard → instance → Settings → Webhooks:
-- **Webhook URL**: `https://[render-url]/webhook/green-api`
-- Confirm `incomingWebhook: yes` (already set in `wa-setup` - sanity-check)
-- Save
-
-Or via API:
-```
-POST https://[API_URL]/waInstance[ID]/setSettings/[TOKEN]
-{
-  "webhookUrl": "https://[render-url]/webhook/green-api",
-  "incomingWebhook": "yes",
-  "outgoingMessageWebhook": "no",
-  "outgoingAPIMessageWebhook": "no"
-}
+```bash
+# Check what's missing
+command -v render >/dev/null || brew install render
+command -v gh >/dev/null || brew install gh
+command -v jq >/dev/null || brew install jq
 ```
 
-### E2. Force a test notification
-Send a test payload from Green API's "Test" button (or send a real message from the student's personal phone). Check Render logs - should see:
+**GitHub auth**:
+```bash
+gh auth status
 ```
-POST /webhook/green-api 200
+If not logged in: `gh auth login` (guides via browser — **STOP** and let the student complete).
+
+**Push the code**:
+```bash
+cd [project-dir]
+git init 2>/dev/null || true
+git add .
+git commit -m "Initial commit — [bot_name] WhatsApp agent" || git commit --allow-empty -m "Redeploy"
+gh repo create [bot_name]-whatsapp --private --source=. --push 2>/dev/null || git push
 ```
 
-## Phase F: Live End-to-End Test
+Use `--private`. Not because the code is sensitive — it isn't, secrets are in `.env` which is gitignored — but because nothing good comes from strangers forking a student's half-polished prompt.
+
+**Sanity check**: verify `.env` is NOT in the pushed repo. If it is, `.gitignore` is broken — fix and force-push before continuing.
+
+## Phase B: Render API Key (one-time, student action)
+
+**"ב-Render צריך ליצור מפתח API פעם אחת. זה מאפשר לי ליצור שירותים ולפרוס בלי שתצטרך להיכנס לדשבורד בכל פעם."**
+
+1. **STOP**: open https://dashboard.render.com/u/settings#api-keys in the browser (or tell the student: Render Dashboard → Account Settings → API Keys)
+2. **STOP**: student clicks "Create API Key", names it `whatsapp-agent`, copies the value
+3. Student pastes the key. Claude Code saves it to `.env`:
+   ```
+   RENDER_API_KEY=rnd_...
+   ```
+4. Also export for the current shell:
+   ```bash
+   export RENDER_API_KEY="$(grep '^RENDER_API_KEY=' .env | cut -d= -f2)"
+   ```
+
+**Why API key and not `render login`**: `render login` opens a browser, stores a token that silently expires. API keys don't expire, work headlessly, and survive shell restarts. Always prefer API keys for automated scripts.
+
+## Phase C: GitHub ↔ Render (one-time, browser, if needed)
+
+**This is the only truly manual step.** Render needs authorization to read the student's GitHub repos. If the student has used Render before with this GitHub account, skip. Otherwise:
+
+1. Try a dry-run: `render services create --name test-connection --type web_service --repo https://github.com/[user]/[bot]-whatsapp --branch main --runtime python --build-command 'echo test' --start-command 'echo test' --plan free --dry-run 2>&1`
+2. If the output mentions "repo not authorized" or similar: **STOP** and guide the student:
+   - Open https://dashboard.render.com/settings#git-providers
+   - Click "Connect GitHub"
+   - Approve for the specific repo or all repos
+   - Return and say "done"
+3. Retry step 1 until it succeeds.
+
+**Why this happens**: Render workspaces each authorize their own set of GitHub repos. First service from a new account needs this handshake. Subsequent services don't.
+
+## Phase D: Create Resources (automated)
+
+Every command in this phase runs via CLI or curl — no browser.
+
+### D1. Decide the plan
+Read `spec.archetype`:
+- `personal_assistant` → `--plan free` (but **STOP** to warn about cold-start behavior)
+- `customer_service` → `--plan starter` (**STOP** for payment approval: "זה $7 לחודש - אוקיי?")
+
+### D2. Decide the region
+Ask once, remember in `.wa-state.json` as `render_region`:
+- Israel timezone → `frankfurt` (recommended, ~50ms latency)
+- Everywhere else → `oregon` (default)
+
+### D3. Create the web service
+
+Claude Code reads env vars from `.env` and constructs the command. **Every LLM/Green API/spec-derived env var must be passed via `--env-var`**:
+
+```bash
+# Load env vars into current shell so we can pass them explicitly
+set -a; source .env; set +a
+
+SVC_OUTPUT=$(render services create \
+  --name "${BOT_NAME}-whatsapp" \
+  --type web_service \
+  --repo "https://github.com/${GH_USER}/${BOT_NAME}-whatsapp" \
+  --branch main \
+  --runtime python \
+  --region "${RENDER_REGION:-frankfurt}" \
+  --plan "${RENDER_PLAN:-free}" \
+  --build-command "pip install -r requirements.txt" \
+  --start-command 'uvicorn main:app --host 0.0.0.0 --port $PORT' \
+  --env-var "GREEN_API_URL=$GREEN_API_URL" \
+  --env-var "GREEN_API_INSTANCE=$GREEN_API_INSTANCE" \
+  --env-var "GREEN_API_TOKEN=$GREEN_API_TOKEN" \
+  --env-var "LLM_PROVIDER=$LLM_PROVIDER" \
+  --env-var "LLM_MODEL=$LLM_MODEL" \
+  --env-var "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}" \
+  --env-var "OPENAI_API_KEY=${OPENAI_API_KEY:-}" \
+  --env-var "GOOGLE_API_KEY=${GOOGLE_API_KEY:-}" \
+  --env-var "DATABASE_PATH=/data/conversations.db" \
+  --env-var "MAX_HISTORY=${MAX_HISTORY:-20}" \
+  --output json)
+
+SVC_ID=$(echo "$SVC_OUTPUT" | jq -r .id)
+SVC_URL=$(echo "$SVC_OUTPUT" | jq -r .serviceDetails.url)
+```
+
+Only pass env vars that have values — empty ones cause Render errors. Skip any block that's not relevant to the spec (e.g. no `GOOGLE_API_KEY` if Google isn't selected — but it will be added later in `wa-connect` via `render env set`).
+
+### D4. Attach the persistent disk (REST API — CLI doesn't support disks)
+
+```bash
+curl -fsS -X POST "https://api.render.com/v1/disks" \
+  -H "Authorization: Bearer $RENDER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "$(jq -n --arg sid "$SVC_ID" '{
+    serviceId: $sid,
+    name: "data",
+    mountPath: "/data",
+    sizeGB: 1
+  }')"
+```
+
+If `--plan free`: this will fail, because free tier doesn't support disks.
+- **Option A** (recommended): **STOP** and offer the student to upgrade: "Disk נדרש כדי שהבוט יזכור שיחות בין restarts. זה 25 סנט לחודש של disk + עוד $7 ל-Starter. יאללה?"
+- **Option B** (no disk, stateless): change `DATABASE_PATH` to `./conversations.db` (ephemeral) and warn: "הבוט ישכח שיחות בכל פעם שה-Render מתאתחל."
+
+### D5. Create Postgres (only if spec has Outlook tools)
+
+Check `spec.tools` for `outlook_calendar` or `outlook_mail`. If present:
+
+```bash
+PG_OUTPUT=$(curl -fsS -X POST "https://api.render.com/v1/postgres" \
+  -H "Authorization: Bearer $RENDER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "$(jq -n --arg name "${BOT_NAME}-tokens" --arg region "${RENDER_REGION}" '{
+    name: $name,
+    region: $region,
+    plan: "free",
+    version: 16
+  }')")
+
+# Wait for it to be ready (up to 2 min)
+PG_ID=$(echo "$PG_OUTPUT" | jq -r .id)
+# Poll GET /v1/postgres/{id} until status == "available"
+
+# Fetch connection string
+PG_CONN=$(curl -fsS "https://api.render.com/v1/postgres/$PG_ID/connection-info" \
+  -H "Authorization: Bearer $RENDER_API_KEY" | jq -r .externalConnectionString)
+
+# Add to the web service env
+curl -fsS -X PUT "https://api.render.com/v1/services/$SVC_ID/env-vars" \
+  -H "Authorization: Bearer $RENDER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d "[{\"key\":\"DATABASE_URL_PG\",\"value\":\"$PG_CONN\"}]"
+```
+
+Then create the `user_tokens` table — run `scripts/init_pg.py` from the project locally, pointing at `DATABASE_URL_PG`. (This script is written during `wa-connect` E2 when Outlook is being wired; if Outlook is planned but not yet connected, skip this and let `wa-connect` handle it when the time comes.)
+
+## Phase E: Deploy + Wait for Live
+
+```bash
+render deploys create "$SVC_ID" --wait
+```
+
+`--wait` blocks until the deploy finishes. Stream logs in a parallel process if the student wants to watch:
+```bash
+render logs --resources "$SVC_ID" --tail &
+LOGS_PID=$!
+# (after render deploys create finishes:)
+kill $LOGS_PID 2>/dev/null
+```
+
+After success: verify the health endpoint.
+```bash
+curl -fsS "${SVC_URL}/health"
+```
+Expected: `{"status":"ok"}`. If not, jump to the Debug Playbook below.
+
+Save the URL to `.wa-state.json` as `render_url`.
+
+## Phase F: Wire Green API Webhook (automated)
+
+This is the step that makes the bot actually receive messages. `wa-setup` step 8 enabled `incomingWebhook: yes` but left the URL blank. Now we fill it:
+
+```bash
+curl -fsS -X POST "${GREEN_API_URL}/waInstance${GREEN_API_INSTANCE}/setSettings/${GREEN_API_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "$(jq -n --arg url "${SVC_URL}/webhook/green-api" '{
+    webhookUrl: $url,
+    incomingWebhook: "yes",
+    outgoingMessageWebhook: "no",
+    outgoingAPIMessageWebhook: "no"
+  }')"
+```
+
+Expected response: `{"saveSettings": true}`.
+
+Verify it stuck:
+```bash
+curl -fsS "${GREEN_API_URL}/waInstance${GREEN_API_INSTANCE}/getSettings/${GREEN_API_TOKEN}" | jq '.webhookUrl, .incomingWebhook'
+```
+
+Should print the Render URL and `"yes"`.
+
+## Phase G: Live End-to-End Test
 
 **"הרגע שחיכית לו. תשלח עכשיו הודעה לבוט מהטלפון האישי שלך."**
 
 1. Student sends `היי` from their personal phone to the bot's number
 2. Free tier: wait ~30s for cold start; paid tier: <3s
-3. Bot should reply in the style defined by spec
+3. Bot should reply in the style defined by `spec.identity`
 
-For personal assistant: test the whitelist too - ask a friend to send a message, verify the bot ignores them silently.
+Watch `render logs --resources "$SVC_ID" --tail` in parallel. Expected log sequence:
+- `POST /webhook/green-api` (incoming message)
+- LLM call latency log line
+- `sendMessage` to Green API (outgoing reply)
 
-For customer service with handoff: test the handoff trigger: send "אני רוצה לדבר עם נציג אנושי", confirm the manager's phone receives the relay message.
+For **personal_assistant**: test the whitelist — ask a friend to message the bot, confirm it ignores them silently (log should show the rejection).
+
+For **customer_service** with handoff: test the handoff trigger — send "אני רוצה לדבר עם נציג אנושי", confirm the manager's phone receives the relay.
 
 ## Working? → Update state & hand off
 
 Update `.wa-state.json`:
 - Append `"deploy"` to `completed_stages`
-- Set `current_stage: "maintain"` (deploy is done; anything further is maintenance)
-- Set `render_url` to the deployed service URL
+- Set `render_url` to `$SVC_URL`
+- Set `render_service_id` to `$SVC_ID` (for future redeploys)
+- Set `render_postgres_id` if created
 - Update `last_touched_iso`
+- **Set `current_stage`**:
+  - If `spec.tools` has external tools (anything other than `reminders`) not in `connected_tools` → `"connect"`
+  - Otherwise → `"maintain"`
 
 Then:
 
-**"🎉 הסוכן עלה לאוויר. כל מי שישלח הודעה למספר [X] יקבל תשובה 24/7."**
+**"🎉 הסוכן עלה לאוויר. שלחת הודעה וקיבלת תשובה בוואטסאפ. זה אמיתי."**
 
-Share these facts with the student:
-- **Render URL**: `[render_url]` — save it, צריך אותו לדיבוג בעתיד
-- **Free tier sleep**: במסלול חינמי, ההודעה הראשונה אחרי 15 דקות שקט לוקחת ~30 שניות. Starter ($7/mo) פותר את זה.
-- **Green API renewal**: חודשי אם במסלול בתשלום. חינמי (Developer) - ללא חיוב.
-- **LLM cost**: תלוי בתעבורה. בדוק ב-`[provider]/billing` שבועית בהתחלה.
+Check remaining external tools = `spec.tools - connected_tools - ["reminders"]`.
 
-**"מכאן כל שינוי — הוספת כלי, שינוי אופי, תקלה — נעשה דרך `wa-maintain`. תגיד `/wa` ואני אנתב אותך לשם בכל פעם שתרצה."**
+**If external tools remain**:
+**"יופי. עכשיו כשהבוט חי, נחבר לו את הכלים אחד-אחד: [list]. כל חיבור: OAuth או credentials → קוד → push → Render עושה redeploy אוטומטי → בדיקה בוואטסאפ. מוכן להתחיל?"**
 
-## Debug Playbook (for Not Working)
+- Yes → invoke `wa-connect`
+- Later → `/wa` when back
 
-Diagnose in this exact order:
+**If no external tools**:
+**"אין עוד כלים לחבר לפי האפיון. הבוט מוכן. אם תרצה לשנות משהו - `/wa` ואני אעביר אותך ל-maintain."**
 
-1. **Health endpoint**: `curl https://[url]/health` → if not 200, Render service itself is broken. Check Render logs.
-2. **Webhook delivery**: Green API dashboard → instance → Webhook Test → does Green API show a 2xx response from Render? If no, webhook URL is wrong.
-3. **Application logs**: Render → service → Logs. Filter by "ERROR" or "Traceback". Most common:
-   - `anthropic.AuthenticationError` → wrong API key in env
-   - `sqlite3.OperationalError: unable to open database file` → disk not mounted or `DATABASE_PATH` wrong
-   - `httpx.ConnectError` → Green API unreachable from Render (check instance is authorized)
-4. **Tool-specific failures**: LLM calls a tool, it fails, reply is generic. Look for the tool name in logs.
-5. **Message format**: if bot receives but replies empty, check webhook payload shape matches what `main.py` expects.
+Share these facts regardless:
+- **Render URL**: `[render_url]` — שמור אותו
+- **Free tier sleep**: קולד סטארט ~30 שניות אחרי 15 דקות שקט. Starter ($7/mo) פותר
+- **Green API**: חודשי אם במסלול בתשלום, חינמי ל-Developer instance
+- **LLM**: תלוי בתעבורה. בדוק billing שבועית בהתחלה.
+
+## Debug Playbook
+
+Diagnose in this order. Don't skip.
+
+### 1. Is the service alive?
+```bash
+curl -fsS "${SVC_URL}/health"
+```
+If not 200 → service is down. Get logs:
+```bash
+render logs --resources "$SVC_ID" --tail --num 100
+```
+Common causes:
+- Env var missing → `render env list --resources "$SVC_ID"` and compare to `.env`
+- Crash on startup → read the Python traceback in logs, fix, `git push`
+- Free tier sleeping → fine, wake it with a test message
+- OOM → upgrade to Starter
+
+### 2. Is Green API delivering webhooks?
+```bash
+curl -fsS "${GREEN_API_URL}/waInstance${GREEN_API_INSTANCE}/getSettings/${GREEN_API_TOKEN}" | jq
+```
+Check `webhookUrl` matches `$SVC_URL`. If wrong (e.g., service was recreated), re-run Phase F.
+
+### 3. Is the LLM happy?
+Filter logs:
+```bash
+render logs --resources "$SVC_ID" --tail --num 200 | grep -i "anthropic\|openai\|google"
+```
+- `AuthenticationError` → `render env set <SVC_ID> ANTHROPIC_API_KEY=<new_key>`, service auto-restarts
+- `RateLimitError` → out of funds; top up at provider's billing page
+
+### 4. A specific tool failing?
+Search logs for the tool name. For each external tool, the error typically points back to a `wa-connect` step that needs re-running.
+
+### 5. Message received but bot didn't reply?
+- Check `senderData.senderId` filter in `main.py` — maybe accidentally dropping real messages
+- Check outbound Green API credentials work: retry the smoke test from `wa-setup` step 9
 
 ## Common Issues
 
 | Problem | Solution |
 |---------|----------|
-| Deploy stuck on "Building" >5 min | Usually `pip install` resolving conflicts. Check build logs. |
-| Service loops "Live → Crashed → Live" | Env var missing, app raises on startup. Check logs for which. |
+| `render services create` fails with "repo not authorized" | Phase C wasn't done. Go to dashboard.render.com/settings#git-providers, connect GitHub. |
+| `render services create` fails with "not logged in" | `RENDER_API_KEY` not exported in current shell. `export RENDER_API_KEY="..."` from `.env`. |
+| Deploy stuck on "Building" >5 min | `pip install` resolving conflicts. Read build logs. |
+| Service loops Live → Crashed → Live | Startup error. Check logs for the Python traceback. |
 | First message works, second doesn't | `idMessage` dedup false positive, or SQLite locked. Check disk mount. |
-| Free tier: bot misses messages during sleep | Known issue - Green API retries up to 3 times over 15 min. If missed consistently, upgrade to paid tier. |
-| Microsoft token expires after 2 weeks | The token keeper job from `wa-connect` E9 wasn't added. Add it or manually re-run OAuth. |
-| Starting Green API webhook test returns 404 | `main.py` route path doesn't match `/webhook/green-api`. Check and align. |
-| Logs show messages being received but no reply sent | Green API outbound credentials wrong, or `senderData.senderId` filter accidentally drops all. |
+| Free tier: bot misses messages during sleep | Known — Green API retries 3× over 15min. Upgrade to paid tier if consistent. |
+| Microsoft token expired | `wa-connect` E9 (token keeper) not set up. Re-run OAuth via `wa-connect`. |
+| Webhook test returns 404 | `main.py` route path mismatch. Check and align. |
+| Attach disk fails with "plan does not support disks" | On Free tier. Upgrade or skip disk (ephemeral DB). |
+| `render` CLI complains about workspace | `render workspace list` then `render workspace set <id>` to pick the right one. |
 
 ## Architectural Notes (for Claude Code's reference)
 
-- **Why `--private` GitHub repo**: the bot's code contains tool names and prompts tuned to the student's business. Not usually sensitive, but privacy is the safer default.
-- **Why disk at `/data`** (not `./data`): Render's root filesystem is read-only on paid plans and ephemeral on free. Mounted disks are the only persistent storage.
-- **Why `DATABASE_PATH` is a full path**, not `./conversations.db`: app's CWD on Render is not stable across redeploys; absolute path under `/data` is.
-- **Why webhook URL goes in Green API's DB, not Render env var**: Green API is the source of truth for the connection. Changing Render URL (e.g., custom domain later) requires updating Green API, not vice versa.
-- **Why the Render region matters**: Israel → Frankfurt (eu-central). ~50ms latency vs ~150ms from Oregon. For a bot, imperceptible, but token refresh calls to Google/Microsoft cluster in Europe.
-- **Why `HANDOFF_MANAGER_PHONE` is an env var**, not in `spec.json`: spec is source-of-truth for logic; phone number is infra (different per environment if student ever has staging). Keep `spec.json` pure-product, env vars for infra.
-- **Why we don't set up `render.yaml` blueprint deploy**: students understand "click buttons in dashboard" better than YAML. `render.yaml` is generated anyway (for future reference) but not used as the primary path.
+- **Why API key over `render login`**: tokens from `render login` expire silently; API keys don't. Scripts break unpredictably on expired tokens. API key = one user action, works forever.
+- **Why `--private` GitHub repo**: nothing in the repo is secret (`.env` is gitignored), but unnecessary exposure of a student's in-progress prompt has no upside.
+- **Why disk at `/data`, not `./data`**: Render's app filesystem is ephemeral on free, read-only on paid. Only mounted disks persist.
+- **Why `DATABASE_PATH` is absolute**: app's CWD on Render is not stable across redeploys.
+- **Why webhook URL lives in Green API, not env var**: Green API is the source of truth for the connection. Render URL rarely changes; if it does, updating Green API once is trivial.
+- **Why Frankfurt for Israeli users**: ~50ms vs ~150ms from Oregon. Imperceptible for a single message, but token refresh to Google/Microsoft clusters in Europe benefits.
+- **Why no `render.yaml` blueprint**: CLI direct commands are easier to reason about than YAML for non-technical students. If we ever add team/multi-env support, switch to blueprint.
+- **Why `render_service_id` in `.wa-state.json`**: `wa-connect` and `wa-maintain` need it for `render env set` and `render deploys create`. Without it, they'd have to re-look-up the service by name every time.
+- **Idempotency**: running `wa-deploy` a second time on the same project should detect the existing `render_service_id` and go to maintenance mode instead of creating a duplicate service.

@@ -1,15 +1,19 @@
 ---
 name: wa-connect
-description: "Wire a tool (Google Calendar, Gmail, WhatsApp groups, Reminders, Human handoff) into a built WhatsApp agent. Use after wa-build when the student is ready to give the bot capabilities, or says 'wa-connect', 'חבר כלי', 'חבר יומן', 'חבר מייל', 'חבר קבוצות', 'תוסיף כלי לסוכן'. This is a single skill that knows all four connection types; it routes based on which tool the student picks. Handles auth, credential storage, tool implementation, and verification."
+description: "Wire a tool (Google Calendar, Gmail, WhatsApp groups, Human handoff, Outlook) into a deployed WhatsApp agent. Use after wa-deploy when the student is ready to give the bot capabilities, or says 'wa-connect', 'חבר כלי', 'חבר יומן', 'חבר מייל', 'חבר קבוצות', 'תוסיף כלי לסוכן'. Each invocation wires exactly ONE tool and redeploys. Run multiple times to add multiple tools. Handles auth, credential storage, tool implementation, redeploy, and live verification."
 ---
 
 # Connect a Tool to the Agent
 
-Give the agent a capability. Handles auth setup, writes the tool implementation into `tools/<tool>.py`, registers it in `TOOL_REGISTRY`, and verifies end-to-end with a live agent message.
+Give the live agent a new capability. Handles auth, writes the tool implementation into `tools/<tool>.py`, registers it in `TOOL_REGISTRY`, pushes to GitHub, waits for Render to redeploy, and verifies end-to-end with a real WhatsApp message.
 
-**This skill is a router.** It asks which tool, then runs the matching sub-flow. All four sub-flows share the same pattern: *auth → credentials → implementation → register → verify*.
+**This skill is a router.** It asks which tool, runs the matching sub-flow, then pushes + redeploys. Each sub-flow shares the same pattern: *auth → credentials → implementation → register → push → redeploy → verify*.
 
-**Prerequisites:** `wa-build` completed (project directory has `main.py`, `agent.py`, `tools/__init__.py`, `spec.json`).
+**Prerequisites:**
+- `wa-deploy` completed (bot is live on Render, `.wa-state.json` has `render_url`)
+- Student can talk to the bot in real WhatsApp already
+
+**This skill runs ONCE per tool.** If the spec lists three external tools, the student runs `wa-connect` three times. This is by design — each tool has its own OAuth/credentials/verification cycle, and batching them makes debugging impossible.
 
 ## Interaction Style
 
@@ -22,12 +26,13 @@ Simple Hebrew with the student. Claude Code drives the integration - browser for
 | **google_calendar** | Google OAuth 2.0 (refresh token) | Google Cloud project | Medium - one-time OAuth consent |
 | **gmail** | Google OAuth 2.0 (same refresh token as calendar!) | Same Google Cloud project | Easy if calendar already done |
 | **whatsapp_groups** | Green API credentials (already in `.env`) | Green API | Trivial - no new auth |
-| **reminders** | None (in-process APScheduler) | None | Trivial - just wire code |
 | **human_handoff** | Green API (already in `.env`) | Green API | Trivial |
 | **outlook_calendar** 🔶 | Microsoft OAuth + **rotating refresh tokens** | Azure App Registration + Postgres/Redis for token storage | **Advanced** - extra infra required |
 | **outlook_mail** 🔶 | Same Microsoft OAuth as outlook_calendar | Same Azure App | **Advanced** - extra infra required |
 
 🔶 = advanced. Requires persistent DB beyond SQLite file. Default to Google if the student is new.
+
+**Note on reminders**: the reminders tool is wired in `wa-build`, not here. It's native to the bot (APScheduler in-process, no external auth). It already works when the student hits `wa-connect`. If the student asks about reminders here, redirect: "התזכורות כבר עובדות מאז שהבוט עלה - נסה 'תזכיר לי בעוד דקה לבדוק'."
 
 ## Architecture Decisions (fixed for all sub-flows)
 

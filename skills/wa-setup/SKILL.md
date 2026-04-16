@@ -82,45 +82,15 @@ Green API has two instance types. The right one depends on step 2:
 - **Personal assistant** → Create a **Developer** instance (free, limited volume)
 - **Customer service** → Create a paid instance. **STOP**: "זה השלב שעולה כסף - ~$15 לחודש. תבחר את החבילה המתאימה ותמלא פרטי אשראי. תגיד לי כשהחבילה פעילה."
 
-After the instance is created, copy three values from the dashboard:
+After the instance is created, ask the student for three values from the dashboard:
 - **Instance ID** (e.g. `7105222798`)
 - **API Token** (long string)
 - **API URL** (e.g. `https://7105.api.greenapi.com`)
 
-### 6. Connect the bot's phone (QR scan)
-This step happens on the phone that will own the bot's WhatsApp number.
+**"קופי-פייסט לכאן את שלושת הערכים האלה מהדשבורד. אני אעשה מהם את כל שאר העבודה הטכנית בשבילך."**
 
-**"עכשיו, בטלפון שאתה רוצה שהבוט ישב בו - לא בטלפון האישי אם בחרנו בנפרד - תפתח WhatsApp → הגדרות → מכשירים מקושרים → קישור מכשיר. ואז סרוק את הקוד שמופיע במסך."**
-
-- Open the instance's QR code page in the browser
-- Student scans with the bot's phone
-- Wait for the dashboard status to change to **authorized**
-- The QR refreshes every ~60 seconds - if it expires, refresh the page
-
-### 7. Enable incoming webhooks
-**This is critical and easy to miss.** Without it, the bot can send but cannot receive.
-
-In the instance settings page:
-- Find the **Settings** or **Webhooks** section
-- Set `incomingWebhook` = **yes** / enabled
-- Keep `outgoingMessageWebhook` and `outgoingAPIMessageWebhook` = **no** (avoids double-handling the bot's own messages)
-- Leave the webhook URL blank for now - it gets set to the Render URL later in `wa-deploy`
-- Save
-
-Or via API (if the student prefers):
-```
-POST https://[API_URL]/waInstance[ID]/setSettings/[TOKEN]
-Content-Type: application/json
-
-{
-    "incomingWebhook": "yes",
-    "outgoingMessageWebhook": "no",
-    "outgoingAPIMessageWebhook": "no"
-}
-```
-
-### 8. Save credentials
-Create a `.env` file in a new project directory. Ask the student where - default to `~/whatsapp-agent/`:
+### 6. Save credentials immediately
+As soon as the student pastes the three values, create `.env` in a new project directory (ask where; default `~/whatsapp-agent/`):
 
 ```
 GREEN_API_URL=https://[INSTANCE_NUMBER].api.greenapi.com
@@ -128,33 +98,87 @@ GREEN_API_INSTANCE=[INSTANCE_ID]
 GREEN_API_TOKEN=[API_TOKEN]
 ```
 
-Tell the student: **"שמרתי את פרטי הגישה בקובץ .env. אל תשתף את הקובץ הזה עם אף אחד - זה כמו סיסמה של הוואטסאפ של הבוט."**
+Also create `.gitignore` that excludes `.env`.
+
+**Why save before scanning/configuring**: the next two steps (QR scan + webhook enablement) both need these credentials. Having them in `.env` means Claude Code can drive the rest automatically.
+
+### 7. Connect the bot's phone (QR scan)
+This step happens on the phone that will own the bot's WhatsApp number. Only the human can do this - it's a physical action.
+
+**"עכשיו, בטלפון שאתה רוצה שהבוט ישב בו - לא בטלפון האישי אם בחרנו בנפרד - תפתח WhatsApp → הגדרות → מכשירים מקושרים → קישור מכשיר. ואז סרוק את הקוד שמופיע במסך."**
+
+- Open the instance's QR code page in the browser (Claude Code can navigate there)
+- Student scans with the bot's phone
+- Poll instance status via API until it shows `authorized`:
+  ```
+  curl "${GREEN_API_URL}/waInstance${GREEN_API_INSTANCE}/getStateInstance/${GREEN_API_TOKEN}"
+  ```
+  Returns `{"stateInstance":"authorized"}` when ready. Poll every ~5s for up to 2 minutes.
+- The QR refreshes every ~60 seconds - if it expires, refresh the page
+
+### 8. Enable incoming webhooks (Claude Code does this - no UI)
+**This is critical and easy to miss.** Without it, the bot can send but cannot receive. **The student does not touch the Green API UI for this step** - Claude Code calls the API directly.
+
+Using the credentials saved in step 6, Claude Code runs:
+
+```bash
+curl -X POST "${GREEN_API_URL}/waInstance${GREEN_API_INSTANCE}/setSettings/${GREEN_API_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "incomingWebhook": "yes",
+    "outgoingMessageWebhook": "no",
+    "outgoingAPIMessageWebhook": "no",
+    "stateWebhook": "no",
+    "deviceWebhook": "no"
+  }'
+```
+
+Expected response: `{"saveSettings": true}`.
+
+Then verify the settings stuck:
+```bash
+curl "${GREEN_API_URL}/waInstance${GREEN_API_INSTANCE}/getSettings/${GREEN_API_TOKEN}"
+```
+
+Confirm the response has `"incomingWebhook": "yes"`. If not, retry.
+
+**Why this works**: Green API's REST API is the source of truth. The dashboard UI is just a wrapper over this same API. Whatever buttons/checkboxes the UI currently calls these settings, the JSON field names stay stable. This is future-proof against UI changes.
+
+**Why the student doesn't need to click anything**: they already gave us the credentials in step 5. Anything we can do via API, we do via API. The student's job is decisions and phone-scanning; our job is the technical glue.
+
+Say to the student:
+**"הפעלתי את ההגדרות - עכשיו ה-instance יודע לקבל הודעות נכנסות. לא צריך להיכנס לדשבורד."**
 
 ### 9. Verify (two-way)
-**Outbound test** - bot → student's phone:
+Claude Code runs both tests using credentials from `.env`. The student only needs to send one message from their phone.
 
-```
-curl -X POST "https://[API_URL]/waInstance[ID]/sendMessage/[TOKEN]" \
+**Outbound test** - bot → student's phone. Ask the student for their personal phone number (the one they use normally), then:
+
+```bash
+curl -X POST "${GREEN_API_URL}/waInstance${GREEN_API_INSTANCE}/sendMessage/${GREEN_API_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"chatId": "972501234567@c.us", "message": "בדיקה - אם קיבלת את זה, החיבור היוצא עובד"}'
 ```
 
 Phone format: country code + number (no `+`, no `0`), `@c.us` suffix. Israeli `0501234567` → `972501234567@c.us`.
 
-**Inbound test** - student → bot:
-Tell the student to send a message from their personal phone to the bot's number. Then fetch the last notification:
+**Student confirms they received the message** on their personal phone.
 
-```
-curl "https://[API_URL]/waInstance[ID]/receiveNotification/[TOKEN]"
+**Inbound test** - student → bot:
+**"עכשיו מהטלפון האישי שלך, שלח לבוט הודעה כלשהי - 'היי' זה מספיק."**
+
+Poll the notification queue:
+```bash
+curl "${GREEN_API_URL}/waInstance${GREEN_API_INSTANCE}/receiveNotification/${GREEN_API_TOKEN}"
 ```
 
 If a notification with `typeWebhook: "incomingMessageReceived"` comes back - incoming is working. Delete it so the queue is clean:
 
-```
-curl -X DELETE "https://[API_URL]/waInstance[ID]/deleteNotification/[TOKEN]/[RECEIPT_ID]"
+```bash
+curl -X DELETE "${GREEN_API_URL}/waInstance${GREEN_API_INSTANCE}/deleteNotification/${GREEN_API_TOKEN}/[RECEIPT_ID]"
 ```
 
-**"שתי כיוונים עובדים. החיבור מוכן."**
+**"שני הכיוונים עובדים. החיבור מוכן."**
 
 ### 10. Update state & hand off
 
@@ -190,10 +214,10 @@ Then say:
 | QR code won't scan | Camera autofocus / expired code | Refresh page, make phone camera ~20cm from screen |
 | Instance stuck "not authorized" | Phone has another WhatsApp Web session | On bot's phone: WhatsApp → Linked Devices → remove all → rescan |
 | Payment failed | Card rejected / region restriction | Try different card, contact Green API support |
-| Outbound test returns 466 | `incomingWebhook` not enabled yet | Revisit step 7 |
+| Outbound test returns 466 | `incomingWebhook` not enabled yet | Revisit step 8 (re-run the setSettings curl) |
 | Outbound test returns 401 | Wrong API Token | Copy token again from dashboard |
 | Outbound returns 400 "chatId" | Wrong phone format | Use country code + number + `@c.us`, no plus, no leading zero |
-| `receiveNotification` returns empty | No new messages, or incoming webhook disabled | Re-send from personal phone; if still empty, revisit step 7 |
+| `receiveNotification` returns empty | No new messages, or incoming webhook disabled | Re-send from personal phone; if still empty, re-run `getSettings` (step 8) and confirm `incomingWebhook` = `yes` |
 | "Account already exists" on register | Existing Green API account | Log in instead of registering |
 | Free trial expired mid-build | 3-day trial ran out | Upgrade to paid (customer service path) or create new account with different email |
 
