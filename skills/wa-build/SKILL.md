@@ -194,9 +194,20 @@ Render reads this file during build and pins the interpreter. Without it, build 
 - Opens connection per-call (no pooling headaches, fine for Render scale)
 
 **`prompt.py`**
-- `build_system_prompt(spec) -> str`
-- Composes: identity + tone + audience rules + scope rules + knowledge base + tool availability statement
-- **Crucial**: embeds the handoff rule ("If the user asks for a human, call `human_handoff` tool with their phone number and name") so the LLM knows when to route
+- `build_system_prompt(spec, tool_registry) -> str`
+- Composes: identity + tone + audience rules + scope rules + knowledge base + **dynamic** tool availability section
+- **Dynamic tool section**: iterates `tool_registry.values()` and lists each tool's name + description. **Never hardcode the tool list.** When `wa-connect` adds a tool, the prompt updates automatically on next build without a student forgetting to announce it to the LLM.
+  ```python
+  def _tools_section(tool_registry):
+      if not tool_registry:
+          return "אין לך כלים חיצוניים כרגע. ענה מהידע שלך בלבד."
+      lines = ["יש לך הכלים הבאים:"]
+      for name, td in tool_registry.items():
+          desc = td["schema"].get("description", "")
+          lines.append(f"- `{name}`: {desc}")
+      return "\n".join(lines)
+  ```
+- **Crucial**: embeds the handoff rule ("If the user asks for a human, call `request_human_handoff` tool") when that tool is in the registry — detect via `"request_human_handoff" in tool_registry` rather than hardcoding.
 
 **`agent.py`**
 - Single function: `handle_message(chat_id, sender_phone, message_text) -> reply_text`
@@ -205,6 +216,40 @@ Render reads this file during build and pins the interpreter. Without it, build 
 - Tool-calling loop: if LLM asks for a tool, execute it, feed result back, repeat (max 5 iterations, then force a reply)
 - Append user message and final reply to DB
 - Return reply text
+- **CRITICAL: framework-controlled parameter injection** (see below)
+
+### Framework-controlled parameters (security + correctness)
+
+Some tool parameters must never be chosen by the LLM — the framework owns them. Most common: `chat_id`. If the LLM picks the chat_id, it can (accidentally or via jailbreak) send a reminder to a different user, or guess the wrong format ("user's name" instead of `972XXXXXXXXX@c.us`), causing Green API 400 and silent tool failure.
+
+Implement this pattern in `agent.py`:
+
+```python
+# Tools whose chat_id must be overridden from the webhook context,
+# never from LLM-chosen arguments. Every tool that sends a message
+# or schedules an action for "the current user" belongs here.
+FRAMEWORK_INJECTED_CHAT_ID = {
+    "schedule_reminder",
+    "list_reminders",
+    "cancel_reminder",
+    # extended by wa-connect when human_handoff is added:
+    # "request_human_handoff",
+}
+
+def _run_tool(tool_use, chat_id: str):
+    tool_def = TOOL_REGISTRY[tool_use.name]
+    tool_input = dict(tool_use.input or {})
+
+    # Framework owns these, not the LLM
+    if tool_use.name in FRAMEWORK_INJECTED_CHAT_ID:
+        tool_input["chat_id"] = chat_id  # override
+
+    return tool_def["fn"](**tool_input)
+```
+
+The tool schemas for these tools should **still** declare `chat_id` as required (so the LLM's tool-calling loop doesn't break), but the framework overwrites whatever value the LLM chose. Document this in the schema description: `"chat_id will be filled by the framework; leave empty"`.
+
+**Adding a new framework-injected tool later** (e.g., during `wa-connect`): append to `FRAMEWORK_INJECTED_CHAT_ID`. This is the one exception to the "tools live in `tools/`" rule — the *set* of framework-injected names lives in `agent.py` because only the framework sees the webhook context.
 
 **`main.py`**
 - FastAPI app
@@ -295,11 +340,32 @@ If the student isn't happy:
 
 Keep the iteration loop tight - don't rewrite files the student hasn't asked about.
 
-### 9. Update state & hand off
+### 9. Memory persistence warning
+
+**Before** handing off to deploy, warn the student about what will happen to conversations and reminders:
+
+**"משהו שחשוב לדעת לפני שמעלים לאוויר:"**
+
+Explain based on what's likely:
+- **Render Free tier without disk**: "השיחות והתזכורות יחיו במזה שהבוט לא מתאתחל. Render עושה restart אוטומטית בערך כל 12 שעות, ואז הכל נמחק. זה לא באג - זה איך Render Free עובד."
+- **Render Free + Disk ($0.25/mo)**: "עם disk קטן, הכל נשמר. מומלץ."
+- **Supabase/Postgres חיצוני**: "הכי עמיד, גם חינמי. מתאים לבוט שיהיה בפרודקשן לטווח ארוך."
+
+**"אחרי שנעלה לאוויר, אם תרצה זיכרון קבוע - נעשה את זה דרך הסקיל `wa-persistence`. עכשיו, קדימה לעלות."**
+
+Record the memory-persistence decision (or the lack of one) in `.wa-state.json` as `persistence_choice`:
+- `"ephemeral"` — student chose not to worry about it yet (bot will forget on restart)
+- `"disk_planned"` — will add Render Disk in deploy
+- `"external_db_planned"` — will use `wa-persistence` after deploy
+
+This flag lets `wa-deploy` and `wa-maintain` know what the student intended.
+
+### 10. Update state & hand off
 
 Update `.wa-state.json`:
 - Append `"build"` to `completed_stages`
 - Set `current_stage: "deploy"` (always — external tools come after deploy)
+- Set `persistence_choice` from step 9
 - Update `last_touched_iso`
 
 Then, regardless of what's in `spec.tools`:

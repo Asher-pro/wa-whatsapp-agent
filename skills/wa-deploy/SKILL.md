@@ -273,6 +273,32 @@ add_env_var() {
     -H "Content-Type: application/json" \
     -d "$merged" >/dev/null
 }
+
+# Remove an env var entirely. Used when migrating (e.g., DATABASE_PATH → DATABASE_URL).
+# Usage: remove_env_var <service_id> <key>
+remove_env_var() {
+  local svc_id="$1" key="$2"
+  local existing merged
+  existing=$(curl -fsS "https://api.render.com/v1/services/$svc_id/env-vars" \
+    -H "Authorization: Bearer $RENDER_API_KEY" \
+    | jq '[.[].envVar | {key, value}]')
+  merged=$(echo "$existing" | jq --arg k "$key" '[.[] | select(.key != $k)]')
+  curl -fsS -X PUT "https://api.render.com/v1/services/$svc_id/env-vars" \
+    -H "Authorization: Bearer $RENDER_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d "$merged" >/dev/null
+}
+
+# Trigger a deploy explicitly. Env var changes do NOT reliably auto-trigger deploys
+# on Render. Always call this after mutating env vars.
+# Usage: trigger_redeploy <service_id>
+trigger_redeploy() {
+  local svc_id="$1"
+  curl -fsS -X POST "https://api.render.com/v1/services/$svc_id/deploys" \
+    -H "Authorization: Bearer $RENDER_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"clearCache": "do_not_clear"}' | jq -r .id
+}
 ```
 
 Use `add_env_var` whenever env vars need to be added **after** the initial `services create`:

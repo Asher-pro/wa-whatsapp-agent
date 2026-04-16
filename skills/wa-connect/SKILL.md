@@ -108,28 +108,89 @@ Jump to the matching sub-flow below.
 ### A1. Explain once
 **"יומן/Gmail של Google דורשים הרשאה חד-פעמית - בעצם אתה אומר לגוגל 'אני מאשר לבוט הזה לקרוא את היומן שלי'. זה מתבצע בדפדפן, ואחרי שאישרת פעם אחת, הבוט מקבל מפתח ארוך-טווח ושומר אותו אצלו. אתה יכול לבטל את ההרשאה כל רגע דרך הגדרות Google."**
 
-### A2. Google Cloud project
+### A2. Google project + OAuth setup (Google Auth Platform, late 2025+)
+
 Check if `GOOGLE_CLIENT_ID` already exists in `.env`. If yes, skip to A3.
 
-Otherwise:
-- Open https://console.cloud.google.com in the browser
-- **STOP for login**: student signs in with the Google account that owns the calendar/mail the bot will access
-- Create a new project called `whatsapp-agent-[bot_name]`
-- Enable APIs: Gmail API, Google Calendar API (both, even if only one is needed now - makes future connection free)
-- Go to "APIs & Services → OAuth consent screen"
-  - User type: **External**
-  - App name: `[bot_name] WhatsApp Agent`
-  - User support email: student's email
-  - Scopes: `.../auth/calendar.events`, `.../auth/gmail.readonly`, `.../auth/gmail.send` (if Gmail send enabled in spec)
-  - Test users: add the student's own email (until published, OAuth flow only works for test users)
-- Go to "APIs & Services → Credentials"
-  - Create OAuth client ID
-  - Application type: **Desktop app**
-  - Download the JSON credentials file
+Otherwise — **important**: Google Cloud Console restructured this entire flow in late 2025. What used to be "APIs & Services → OAuth consent screen" is now the **Google Auth Platform** at a different URL. Old tutorials (including older versions of this skill) will confuse the student.
 
-**"תוריד את קובץ ה-JSON שקיבלת מ-Google. אני שומר אותו אצלך בפרויקט ואז עושה את תהליך ההרשאה."**
+**A2.1. Create or pick a project**
+- Open https://console.cloud.google.com
+- **STOP for login**: student signs in with the Google account that owns the calendar/mail the bot will access (not a different account — OAuth only works for this one)
+- Create a new project: top bar → project dropdown → "New Project"
+  - Name: `whatsapp-agent-[bot_name]`
+  - No organization (for personal bots)
 
-Save the JSON as `google_client_secret.json` in the project dir. Add it to `.gitignore` immediately.
+**A2.2. Enable the APIs**
+- Left sidebar → "APIs & Services" → "Library"
+- Search "Gmail API" → Enable
+- Search "Google Calendar API" → Enable
+- (Enable both even if the student only wants one now. Adding later requires re-running OAuth. Enabling upfront is free.)
+
+**A2.3. Open Google Auth Platform (the new home for OAuth config)**
+- Navigate to https://console.cloud.google.com/auth/overview (or sidebar → "Google Auth Platform")
+- You'll see 4 tabs on the left: **Overview**, **Branding**, **Audience**, **Clients**, **Data access**
+- This is the restructured replacement for the old "OAuth consent screen" page. Every subsequent step is inside one of these tabs.
+
+**A2.4. Branding tab**
+- App name: `[bot_name] WhatsApp Agent`
+- User support email: student's email
+- Developer contact information → email: student's email
+- Save
+
+**A2.5. Audience tab (this is the most-missed step)**
+- User type: **External**
+- Publishing status: **Testing** (default — leave as-is unless the student plans to offer this to the public, which they don't)
+- **Add test users**: click "Add users", enter the student's email (the Google account that will grant access). This is REQUIRED — in Testing mode, OAuth only works for explicitly-listed test users. Skip this and you'll get `403: access_denied` at the consent screen.
+
+**A2.6. Clients tab**
+- Click "Create client" (or "+ Create Client" button)
+- **Application type**: ⚠️ **BIG TRAP HERE**
+  - Google's default is **"Web application"**. **DO NOT PICK THIS.**
+  - Scroll down and pick **"Desktop app"**. This is what our `InstalledAppFlow` script uses.
+  - Name: `[bot_name]-desktop`
+- Click "Create"
+
+**"תבחר Desktop app. זו לא ברירת המחדל — גלול למטה ברשימה. אם תבחר Web application בטעות, תהליך ה-OAuth ישבור עם redirect_uri_mismatch."**
+
+**A2.7. If the student already created a Web client** (happens often):
+- Instead of deleting and recreating, you can rescue it:
+  - Click the existing Web client → "Authorized redirect URIs" section
+  - Click "Add URI" → `http://localhost:8765/` (WITH trailing slash)
+  - Save
+- This is less clean than Desktop app (redirect URI is hardcoded), but it works and saves 2 minutes of rework.
+- Document both paths; let the student pick.
+
+**A2.8. Download the client JSON**
+- In the Clients tab, click the download icon next to your client
+- Save as `google_client_secret.json` in the project directory
+
+**A2.9. Sanity-check the JSON before running OAuth**
+
+```bash
+# Quick check: the JSON should have an "installed" key for Desktop app,
+# or a "web" key if it's a Web app.
+jq 'keys' google_client_secret.json
+```
+
+- `["installed"]` → ✅ Desktop app, proceed to A3
+- `["web"]` → Web app. If the student added `http://localhost:8765/` as a redirect URI in A2.7, still works. Otherwise, go back and add it.
+
+**A2.10. gitignore it**
+Add to `.gitignore` immediately:
+```
+google_client_secret.json
+```
+
+**"שמרתי את קובץ ה-JSON. עכשיו נעשה את תהליך ההרשאה."**
+
+**A2.11. (Optional) Data access tab**
+- You'll see a "Data access" tab in Google Auth Platform for explicitly declaring scopes.
+- **For Testing mode with Desktop app, this is optional** — scopes are requested dynamically by our script.
+- If the student reaches the end and Google complains about scopes, come back here and explicitly add:
+  - `https://www.googleapis.com/auth/calendar.events`
+  - `https://www.googleapis.com/auth/gmail.readonly`
+  - `https://www.googleapis.com/auth/gmail.send` (if Gmail send is in spec)
 
 ### A3. OAuth flow (get refresh token)
 Write `scripts/google_auth.py` with the pattern below. **Two critical flags** prevent the two most common failure modes:
@@ -624,6 +685,9 @@ Check remaining tools = `spec.tools - connected_tools`:
 | Problem | Solution |
 |---------|----------|
 | Google OAuth "unverified app" warning scares student | Explain: this is their own app, not someone else's. Click Advanced → Proceed. Won't appear again after first approval. |
+| `Error 400: redirect_uri_mismatch` | Student picked "Web application" in A2.6 instead of "Desktop app". Two fixes: (1) go back and create a Desktop app, OR (2) edit the Web client, add `http://localhost:8765/` (WITH trailing slash) to Authorized redirect URIs. |
+| `Error 403: access_denied` at consent screen | Student's email isn't in "Test users" (Audience tab). Go to A2.5, add it, retry. |
+| JSON downloaded has `"web"` key, not `"installed"` | Wrong client type created. Either re-create as Desktop, or keep Web + add localhost redirect URI (see redirect_uri_mismatch above). |
 | Refresh token comes back as `None` | The A3 script already uses `access_type="offline"` + `prompt="consent"`. If still empty, student has a stale authorization - tell them to go to https://myaccount.google.com/permissions, remove the app, and re-run the script. |
 | `OSError: [Errno 48] Address already in use` on port 8765 | Another process has the port. The script's try/except already falls back to `run_console`. If both fail: kill whatever's on 8765 (`lsof -i :8765 \| grep LISTEN`) or change the port number. |
 | Browser doesn't auto-open (headless/SSH/corporate) | The `run_console` fallback handles this. Student gets a URL to open manually and pastes the code back. |
