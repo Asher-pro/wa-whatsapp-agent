@@ -1,0 +1,36 @@
+name: Validate plugin
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Structure, facts, upgrades, helper commands, versions
+        run: python scripts/validate_plugin.py
+
+      - name: Helper tests (offline, mock Render / Green API)
+        run: python -m unittest discover -s tests -v
+
+      - name: Facts are well-formed (offline)
+        run: python scripts/check_freshness.py --offline --max-age 100000
+
+      - name: Claude Code plugin validator
+        continue-on-error: true   # informative; needs the Claude Code CLI
+        run: |
+          npm install -g @anthropic-ai/claude-code >/dev/null 2>&1
+          claude plugin validate .

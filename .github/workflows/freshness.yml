@@ -1,0 +1,48 @@
+name: Freshness report
+
+# Weekly, deterministic re-check of everything the skills rely on:
+# stale facts, dead sources, new package versions, Render API endpoints.
+# Findings land in ONE open issue labelled "freshness" (updated in place).
+
+on:
+  schedule:
+    - cron: "0 6 * * 0"   # Sundays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  freshness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check
+        run: python scripts/check_freshness.py --markdown freshness.md --json freshness.json
+
+      - name: Open or update the freshness issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          problems=$(python -c "import json;print(json.load(open('freshness.json'))['problems'])")
+          gh label create freshness --color FBCA04 --description "Weekly freshness report" --force >/dev/null
+          existing=$(gh issue list --label freshness --state open --json number --jq '.[0].number')
+          if [ "$problems" = "0" ]; then
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "Re-checked $(date -u +%F): everything is current. Closing."
+              gh issue close "$existing"
+            fi
+            exit 0
+          fi
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body-file freshness.md
+          else
+            gh issue create --title "Freshness report: $problems finding(s)" --label freshness --body-file freshness.md
+          fi
