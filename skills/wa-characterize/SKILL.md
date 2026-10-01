@@ -11,6 +11,11 @@ Define precisely what the agent does, who it answers, and what tools it needs - 
 
 **Prerequisites:** `wa-setup` completed (`.env` with Green API credentials exists).
 
+## Plugin files (read once per session)
+
+- `PLUGIN_ROOT` = `${CLAUDE_SKILL_DIR}/../..` · helper `WA_OPS` = `PLUGIN_ROOT/scripts/wa_ops.py` (`python3` on macOS/Linux, `py -3` on Windows; run from the bot's project directory).
+- Facts that shape the questions below (plan limits, tool scopes): `PLUGIN_ROOT/knowledge/facts.md`. This skill sends the student to no third-party screens, so the freshness protocol rarely applies here.
+
 ## Interaction Style
 
 Simple Hebrew. Ask one question at a time. Wait for the answer. Summarize back what you understood before moving on. The student is making product decisions, not technical ones.
@@ -71,13 +76,17 @@ Use these as defaults, then let the student override.
 
 Record: `name`, `tone_description`, `greeting_example`.
 
+Also derive a technical name for the repo and server — **`slug`**: lowercase English letters, digits and hyphens (GitHub can't use Hebrew). Suggest a transliteration (רוני → `roni-bot`) and let the student change it: **"לשם הטכני (בשביל GitHub ו-Render) צריך שם באנגלית. מה דעתך על `roni-bot`?"**
+
 ### Q2. Audience - who does it answer?
-**Critical for personal assistants.** Re-read Speaker 1 at 13:27 in the source transcript: "*אחת השאלות המאוד, מאוד חשובות שהוא ישאל זה לאיזה מספרים הוא עונה.*"
+**Critical for personal assistants.** Course principle (lesson transcript, 13:27): "*אחת השאלות המאוד, מאוד חשובות שהוא ישאל זה לאיזה מספרים הוא עונה.*"
 
 For **personal assistant**:
 **"הבוט הזה יהיה מחובר ליומן שלך, למייל שלך. אנחנו לא רוצים שיענה לכל מי שכותב. לאיזה מספרים הוא כן עונה? תן לי שמות ומספרי טלפון - אני, אשתי, עוזרת, וכו'."**
 
-Record as a whitelist: `authorized_contacts: [{name, phone_e164}, ...]`
+Record as a whitelist: `authorized_contacts: [{name, phone_e164}, ...]` — `phone_e164` is digits only with country code, no `+` and no leading `0` (`0501234567` → `972501234567`). Normalize what the student types; they will write it every possible way.
+
+**Plan check:** on Green API's free Developer plan the bot can talk to only a few chats a month (F-GREENAPI-PLANS). If the whitelist (including the student) is bigger than that, or the student wants the bot to read WhatsApp groups (each group is a chat), say so now — it means the Business plan — rather than discovering it as rejected messages after deploy.
 
 For **customer service**:
 **"הבוט יענה לכולם חוץ מקבוצות. נכון?"**
@@ -123,14 +132,15 @@ Show the menu with concrete WhatsApp examples — this makes the choice much eas
 - **💬 WhatsApp groups** - *"מה היה בקבוצת המשפחה היום?" / "סכם לי את הקבוצה של הצוות"*
 - **⏰ Reminders** - *"תזכיר לי בעוד שעה להוציא כביסה" / "תזכיר לי מחר ב-9 להתקשר לאמא"*
 - **👤 Human handoff** - *"אני רוצה לדבר עם בן אדם"* - הבוט מעביר פרטים לבעל העסק (בדרך כלל לבוט שירות לקוחות)
+- **🔶 Outlook (מתקדם)** - יומן ומייל של Microsoft במקום גוגל — רק אם העבודה שלך על Outlook. דורש זיכרון קבוע לבוט (Supabase)
 
 **"אילו מהכלים האלה הבוט צריך? אני אעזור לחבר אותם אחר כך - עכשיו רק מסמנים."**
 
-Record: `tools: ["google_calendar", "gmail", "whatsapp_groups", "reminders", "human_handoff"]` (subset).
+Record: `tools: ["google_calendar", "gmail", "whatsapp_groups", "reminders", "human_handoff", "outlook_calendar", "outlook_mail"]` (subset — these exact IDs; wa-connect and `/wa` match on them).
 
 For each selected tool, ask a follow-up:
 - **google_calendar** → "לאיזה יומן - אחד אישי, יומן עבודה, שניהם?"
-- **gmail** → "הוא יכול רק לקרוא, או גם לשלוח? (ברירת מחדל: רק לקרוא - בטוח יותר)"
+- **gmail** → "הוא יכול רק לקרוא, או גם לשלוח? (ברירת מחדל: רק לקרוא - בטוח יותר)" → `tools_config.gmail.mode`: `read_only` (default) or `send`. If the student also wants "סמן כנקרא", use `read_modify` (read + mark as read) — or `send` plus a note; wa-connect picks the matching Google scopes (F-GOOGLE-SCOPES)
 - **whatsapp_groups** → "אילו קבוצות? תן לי שמות - נזהה אותן אחר כך ב-wa-connect"
 - **reminders** → no follow-up
 - **human_handoff** → ask Q6 now
@@ -138,7 +148,7 @@ For each selected tool, ask a follow-up:
 Record per-tool config under `tools_config`.
 
 ### Q6. Human handoff (if selected)
-Re-read Speaker 1 at 15:59 in the transcript - it's **"מעבר לנציג אנושי"** not **"הסלמה"**.
+Course wording (lesson transcript, 15:59): it's **"מעבר לנציג אנושי"** not **"הסלמה"**.
 
 **"כשלקוח רוצה לדבר עם נציג אנושי, מה קורה? יש כמה אפשרויות:"**
 
@@ -151,6 +161,8 @@ Re-read Speaker 1 at 15:59 in the transcript - it's **"מעבר לנציג אנ�
 Record: `handoff: {trigger_phrases: [...], manager_phone: "...", manager_name: "...", mode: "phone_number_relay"}`.
 
 ### Q7. Extras (optional)
+Set silently, don't ask: `timezone: "Asia/Jerusalem"` (reminders and "מה יש לי מחר?" depend on it). Ask only if the student lives abroad.
+
 Ask these only if time permits:
 - **Response length** - short (1-2 sentences), medium, long?
 - **Language** - Hebrew only? Reply in the language sent?
@@ -187,6 +199,7 @@ Only after approval, write `spec.json` to the project directory (same dir as `.e
   "archetype": "personal_assistant | customer_service",
   "identity": {
     "name": "...",
+    "slug": "roni-bot",
     "tone_description": "...",
     "greeting_example": "..."
   },
@@ -208,7 +221,7 @@ Only after approval, write `spec.json` to the project directory (same dir as `.e
   "tools": ["google_calendar", "gmail"],
   "tools_config": {
     "google_calendar": {"calendars": ["primary"]},
-    "gmail": {"mode": "read_only"}
+    "gmail": {"mode": "read_only | read_modify | send"}
   },
   "handoff": null | {
     "trigger_phrases": ["נציג אנושי", "לדבר עם בן אדם"],
@@ -219,7 +232,8 @@ Only after approval, write `spec.json` to the project directory (same dir as `.e
   "extras": {
     "response_length": "short | medium | long",
     "language_mode": "hebrew_only | match_sender",
-    "off_hours_mode": "always_reply | business_hours_only"
+    "off_hours_mode": "always_reply | business_hours_only",
+    "timezone": "Asia/Jerusalem"
   }
 }
 ```
@@ -228,12 +242,12 @@ Fields not answered are set to sensible defaults - document the default in a com
 
 ## Update state & hand off
 
-Update `.wa-state.json`:
-- Append `"characterize"` to `completed_stages`
-- Set `current_stage: "build"`
-- Set `bot_name` from `spec.identity.name`
-- Confirm `archetype` matches spec.archetype (update if mismatch)
-- Update `last_touched_iso`
+Update `.wa-state.json` with the helper:
+```
+WA_OPS state set bot_name="<spec.identity.name>" bot_slug=<spec.identity.slug> archetype=<spec.archetype> timezone=<spec.extras.timezone>
+WA_OPS state stage-done characterize build
+```
+(`archetype` must match `spec.archetype` — if the student changed their mind since wa-setup, the spec wins; re-check the Green API plan against F-GREENAPI-PLANS.)
 
 Then say:
 
@@ -259,3 +273,5 @@ Then say:
 | Knowledge base becoming enormous | Cap at ~2000 words. Offer: "נשים את הקצר בפרומפט; אם תרצה מאגר ידע אמיתי, זה עתידי" |
 | Student skipping audience decision ("כולם") | Push back for personal assistant - explicitly list contacts. Loop bugs live here. |
 | No `.env` file exists | Skill precondition failed - send student back to `wa-setup` |
+| Whitelist bigger than the free plan's chat limit | Explain F-GREENAPI-PLANS now; either trim the list or plan for Business |
+| Student wants Gmail to "mark as read" | That needs a broader Google permission than read-only (F-GOOGLE-SCOPES). Record `gmail.mode: "read_only"` unless they explicitly want marking/sending — wa-connect handles the scopes |

@@ -1,7 +1,7 @@
 {
   "name": "wa-whatsapp-agent",
-  "description": "Build, deploy, and maintain a WhatsApp AI agent - step by step, no coding required. Guides non-technical users through the entire process: connecting WhatsApp via Green API, building an AI-powered conversational agent, deploying to Render.com, and ongoing maintenance.",
-  "version": "2.2.1",
+  "description": "Build, deploy, and maintain a WhatsApp AI agent - step by step, no coding required, on Mac or Windows. Guides non-technical users through connecting WhatsApp via Green API, building an AI-powered conversational agent, deploying to Render.com, connecting tools, and ongoing maintenance. Self-updating: verifies volatile provider facts at runtime, reports drift, and upgrades bots built with older versions.",
+  "version": "3.0.0",
   "author": {
     "name": "Practice AI",
     "email": "asher@practice-ai.co.il"
@@ -18,6 +18,10 @@
     "chatbot",
     "hebrew",
     "no-code",
-    "practice-ai"
+    "practice-ai",
+    "windows",
+    "render",
+    "supabase",
+    "self-updating"
   ]
 }
